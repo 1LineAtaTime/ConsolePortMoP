@@ -1115,6 +1115,42 @@ function CPAPI.RoundCooldown_OnSetCooldown(self, start, duration)
 		return
     end
     
+    -- ---------------------------------------------------------------
+    -- 5.4.8: "no cooldown" stopped meaning Hide() and started meaning
+    -- SetCooldown(0, 0).
+    -- ---------------------------------------------------------------
+    -- 3.3.5's CooldownFrame_SetTimer (FrameXML/Cooldown.lua:1-8) called
+    -- SetCooldown only for a real cooldown and Hide() otherwise, so this hook
+    -- fired exclusively when a cooldown began. 5.4.8's version has no Hide()
+    -- path at all: a ready ability calls SetCooldown(0, 0, ...).
+    --
+    -- This is a bare post-hook on SetCooldown with no argument filtering
+    -- (XML/Templates/ActionButton.xml:73, Ring.xml:46), and Libs/ActionButton's
+    -- UpdateCooldown runs on every repaint -- so it now fires constantly for
+    -- ready abilities and fell straight through to spinner:SetAlpha(1) below,
+    -- with no duration for the OnUpdate to animate back down. The spinner's
+    -- four quadrant textures are created shown and only SetValue ever hides
+    -- them, and SetValue is unreachable when duration is 0, so the button was
+    -- left under a full disc of Textures\cooldown -- black at ~73% alpha -- on
+    -- top of a perfectly usable icon. Casting the ability once drove SetValue
+    -- to the final quadrant, which hides all four textures for good; that is
+    -- why it "fixed itself" one button at a time, and why the ring's icons were
+    -- barely visible too (ring buttons fall through to this same branch).
+    -- Square mode never saw it: the isSquareMode branch above returns first.
+    --
+    -- Restore the old semantics by doing exactly what the Hide() path did, i.e.
+    -- what RoundCooldown_OnHideCooldown still does further down. Deliberately
+    -- NOT clearing f.timespent: if a real cooldown is a frame away from
+    -- expiring, letting its OnUpdate finish normally preserves the completion
+    -- shine, and SetValue on an alpha-0 spinner is harmless.
+    if not duration or duration <= 0 then
+        if roundcd and roundcd.spinner then
+            roundcd.spinner:SetAlpha(0)
+        end
+        CPCC:StopCooldown(roundcd)
+        return
+    end
+
     local f = roundcd.spinner.f
     f.start = start
     f.duration = duration

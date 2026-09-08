@@ -193,35 +193,65 @@ function Bar:PLAYER_REGEN_DISABLED()
 	self:FadeIn(self:GetAlpha())
 end
 
+-- ---------------------------------------------------------------
+-- Re-ask the client which action page we are on.
+-- ---------------------------------------------------------------
+-- This is the whole vehicle fix, and it is a RACE, not a missing event.
+--
+-- Measured on this client, in a Battleground Demolisher:
+--   * the state driver does fire -- state-override_hidden flips to "show"
+--   * the handler does run -- poking state-page runs the snippet
+--   * running UpdateActionBar by hand moves actionpage 1 -> 12
+--   * and yet actionpage sits at 1 for the whole ride
+--
+-- Because [vehicleui] and HasVehicleActionBar() do not become true at the same
+-- moment. [vehicleui] flips as soon as the vehicle UI appears; the vehicle's
+-- action slots arrive later, announced by UPDATE_VEHICLE_ACTIONBAR. So the
+-- state change fires UpdateActionBar exactly once, too early -- every branch
+-- fails, it falls through to GetActionBarPage(), and settles on the player's
+-- own page. The state never changes again, so nothing ever re-runs it.
+--
+-- On 3.3.5 this could not happen: the vehicle bar WAS the bonus bar, so the UI
+-- flag and the slots arrived together with UPDATE_BONUS_ACTIONBAR.
+--
+-- Execute goes through the restricted environment (SecureHandlers.lua:659,
+-- which has no combat guard), so unlike UpdateAllBindings this still works when
+-- you climb into a demolisher mid-fight. The delayed second run covers servers
+-- that send the slots a beat after the event.
+function Bar:RefreshActionPage()
+	pcall(self.Execute, self, [[ control:RunAttribute('UpdateActionBar') ]])
+	if CPAPI and CPAPI.TimerAfter then
+		CPAPI.TimerAfter(0.3, function()
+			pcall(Bar.Execute, Bar, [[ control:RunAttribute('UpdateActionBar') ]])
+		end)
+	end
+end
+
 function Bar:UPDATE_BONUS_ACTIONBAR()
+	self:RefreshActionPage()
 	WrapperLib:UpdateAllBindings()
 end
 
--- 3.3.5 ran vehicles, possession and stances all through the bonus bar, so this
+-- 3.3.5 ran vehicles, possession and stances all through the bonus bar, so that
 -- one handler covered every case. MoP gives each of them its own event and
--- leaves the bonus bar alone, so without these aliases the bar was simply never
--- told to rebuild when the player got into a vehicle.
--- UpdateAllBindings bails out in combat by design; the icon repaint that
--- matters mid-fight is handled insecurely in Libs/ActionButton.lua instead.
+-- leaves the bonus bar alone. UpdateAllBindings bails out in combat by design;
+-- RefreshActionPage above does not, which is the part that matters here.
 Bar.UPDATE_VEHICLE_ACTIONBAR  = Bar.UPDATE_BONUS_ACTIONBAR
 Bar.UPDATE_OVERRIDE_ACTIONBAR = Bar.UPDATE_BONUS_ACTIONBAR
 Bar.UPDATE_POSSESS_BAR        = Bar.UPDATE_BONUS_ACTIONBAR
 
+-- Belt and braces for the same race on the way in and out of the vehicle.
+function Bar:UNIT_ENTERED_VEHICLE(unit)
+	if unit == 'player' then self:RefreshActionPage() end
+end
+Bar.UNIT_EXITED_VEHICLE = Bar.UNIT_ENTERED_VEHICLE
+
 -- OnLoad already pushes the page down to the buttons once it has built them
 -- (the control:RunAttribute('_onstate-page') at the end of it), but OnLoad runs
 -- on ADDON_LOADED -- early enough that the client has not necessarily settled
--- which bar page, stance or form the character is actually in. Until something
--- moves the page again the buttons keep whatever they were given there, which
--- is how logging in stealthed or in a form ends up drawing page-1 icons.
--- Asking once more at PLAYER_LOGIN costs nothing and closes that window.
-function Bar:SyncActionPage()
-	if not InCombatLockdown() then
-		self:Execute([[ control:RunAttribute('UpdateActionBar') ]])
-	end
-end
-
+-- which bar page, stance or form the character is actually in.
 function Bar:PLAYER_LOGIN()
-	self:SyncActionPage()
+	self:RefreshActionPage()
 end
 
 function Bar:LoadReticleSpells()
@@ -266,6 +296,8 @@ function Bar:ADDON_LOADED(name)
 			'UPDATE_VEHICLE_ACTIONBAR',
 			'UPDATE_OVERRIDE_ACTIONBAR',
 			'UPDATE_POSSESS_BAR',
+			'UNIT_ENTERED_VEHICLE',
+			'UNIT_EXITED_VEHICLE',
 		}) do pcall(self.RegisterEvent, self, event) end
 		self.ADDON_LOADED = nil
 	end

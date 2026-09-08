@@ -344,6 +344,16 @@ function SliceMask:StartCooldown(button, start, duration)
     local container = button._sliceMaskContainer
     if not container then return end
 
+    -- CooldownFrame_SetTimer calls SetCooldown(0, 0) for "no cooldown", and
+    -- Update() runs it on every repaint -- so this is reached constantly for
+    -- abilities that are ready. Painting the slices black and relying on the
+    -- OnUpdate to undo it a frame later is a race nobody needs to run; clear
+    -- and leave.
+    if not duration or duration <= 0 or not start or start <= 0 then
+        self:StopCooldown(button)
+        return
+    end
+
     for _, tex in pairs(container._swipeTextures or {}) do
         tex:SetTexture(0,0,0,1)
         tex:SetBlendMode('BLEND')
@@ -362,7 +372,11 @@ function SliceMask:StartCooldown(button, start, duration)
 
         if remaining <= 0 then
             self:SetScript('OnUpdate', nil)
-            for _, tex in ipairs(self._swipeTextures or {}) do
+            -- pairs, not ipairs: _swipeTextures is keyed by slice index and
+            -- BuildSliceContainer skips degenerate slices, so the table can
+            -- have holes. ipairs stops at the first one and leaves the rest of
+            -- the disc black -- the same stuck overlay by a second route.
+            for _, tex in pairs(self._swipeTextures or {}) do
                 tex:SetAlpha(0)
             end
             
@@ -402,7 +416,14 @@ function SliceMask:StopCooldown(button)
     container:SetScript('OnUpdate', nil)
     container._cooldownStart    = nil
     container._cooldownDuration = nil
-    for _, tex in pairs(self._swipeTextures or {}) do
+    -- This read self._swipeTextures, and `self` here is the SliceMask library,
+    -- not the container -- always nil, so the loop cleared nothing while
+    -- StopCooldown still removed the OnUpdate that animates the swipe, leaving
+    -- every slice frozen at whatever alpha it had reached.
+    -- (Note: this is NOT the main-button dark disc -- only modifier buttons
+    -- ever get a slice container, see Core/Wrapper.lua:343. That one is in
+    -- CPAPI.RoundCooldown_OnSetCooldown.)
+    for _, tex in pairs(container._swipeTextures or {}) do
         tex:SetAlpha(0)
     end
 end
@@ -442,4 +463,4 @@ function SliceMask:UpdateTexture(button)
     for _, tex in pairs(container._sliceTextures) do
         if tex then tex:SetTexture(texture) end
     end
-end
+end

@@ -1354,7 +1354,22 @@ function Update(self)
 		if self.mod and self.mod ~= '' then
             self.icon:SetTexture(texture or self.emptyIcon)
         else
-            SetPortraitToTexture(self.icon, texture or self.emptyIcon)
+            -- 5.4.8: SetPortraitToTexture produces an EMPTY portrait when the
+            -- icon file is not already resident, and reports nothing -- the
+            -- texture just comes back as "PortraitN". At login that is most of
+            -- the bar: GetActionTexture has the right path, desaturation is
+            -- off, alpha and vertex colour are full, and the button still draws
+            -- black. It comes right only when something repaints that one
+            -- button, which is why casting a spell fixes that spell's icon and
+            -- nothing else, and why re-running Update() alone does not help.
+            --
+            -- Setting the texture normally first forces the file to load, so
+            -- the portrait call has something to copy. The plain SetTexture
+            -- also leaves a correct (square) icon behind if the portrait still
+            -- fails, which is a far better failure than a black circle.
+            local path = texture or self.emptyIcon
+            self.icon:SetTexture(path)
+            SetPortraitToTexture(self.icon, path)
         end
     end
 
