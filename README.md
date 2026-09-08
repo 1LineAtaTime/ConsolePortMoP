@@ -1,8 +1,8 @@
 # ConsolePortLK
 
-This AddOn is the backported version of [ConsolePort](https://github.com/seblindfors/ConsolePort) 1.9.17 for World of Warcraft - Wrath of the Lich King legacy client (3.3.5a).<br /><br />
+This AddOn is the backported version of [ConsolePortLK]([https://github.com/seblindfors/ConsolePort](https://github.com/leoaviana/ConsolePortLK)) 1.5.0-rc2, which is itself a fork of [ConsolePort](https://github.com/seblindfors/ConsolePort) 1.9.17, for World of Warcraft - Mists of Pandaria legacy client Version 5.4.8 (18414).<br /><br />
 
-Beware that the World of Warcraft 3.3.5a client is old and it's no longer supported, this project has been created only for learning purposes (Lua programming).<br/><br/>
+Beware that the World of Warcraft 5.4.8 client is old and it's no longer supported, this project has been created only for learning purposes (Lua programming).<br/><br/>
 
 ## Differences between ConsolePortLK vs ConsolePort 1.9.17
 
