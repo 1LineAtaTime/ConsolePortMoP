@@ -15,18 +15,23 @@ do
 	-- Blizzard's own system does not use the attribute by default,
 	-- instead resorting to table keys/:GetID() to determine correct action.
 	-- Assigning the attribute manually unifies default UI with addons.
+	-- MoP (5.4.8): there is no BonusActionButton frame set. Bonus/stance bars
+	-- are paged onto ActionButton1-12 through the actionpage attribute, and the
+	-- vehicle/override bar has its own frames (see below). The 3.3.5 entry here
+	-- indexed a nil frame and aborted the whole ADDON_LOADED bootstrap.
 	local bars = {
 		["ActionButton"] = 1,
 		["MultiBarRightButton"] = 3,
 		["MultiBarLeftButton"] = 4,
 		["MultiBarBottomRightButton"] = 5,
 		["MultiBarBottomLeftButton"] = 6,
-		["BonusActionButton"] = 7, -- Bonus ActionBar, shapeshifts, and stuff like that..
 	}
 	for bar, page in pairs(bars) do
 		for btn=1, 12 do
 			local button = _G[bar..btn]
-			button:SetAttribute('action', (12 * (page - 1)) + btn)
+			if button then
+				button:SetAttribute('action', (12 * (page - 1)) + btn)
+			end
 		end
 	end
 
@@ -34,8 +39,16 @@ do
 		ExtraActionButton1:SetAttribute('action', 169)
 	end
 
-	for i=1, 6 do
-		_G["ActionButton"..i]:SetAttribute("action", 132 + i)
+	-- MoP: OverrideActionBar carries the vehicle/possess/override bar on its own
+	-- six buttons. On 3.3.5 that frame did not exist, so ActionButton1-6 were
+	-- hijacked for slots 133-138 -- which on MoP would corrupt the real main bar.
+	for i = 1, (NUM_OVERRIDE_BUTTONS or 6) do
+		local button = _G['OverrideActionBarButton'..i]
+		if button then
+			-- Inert to Blizzard (its buttons have a non-zero ID and page through
+			-- 'actionpage'), but lets ConsolePort identify the slot for hotkeys.
+			button:SetAttribute('action', 132 + i)
+		end
 	end
 end
 
@@ -105,12 +118,14 @@ function ConsolePort:LoadHookScripts()
 	GameTooltip:HookScript('OnTooltipSetSpell', function(self)
 		if not InCombatLockdown() then
 			local owner = self:GetOwner()
-			local id, displayID = CPAPI.IsCustomClient() and owner.spell or SpellBook_GetSpellID(owner:GetID());  
+			-- MoP: SpellBook_GetSpellID(index) was replaced by
+			-- SpellBook_GetSpellBookSlot(button) in 4.0. CPAPI picks whichever exists.
+			local id, displayID = CPAPI.IsCustomClient() and owner.spell or CPAPI:GetSpellBookSlot(owner);
 			local SpellBookOwner = CPAPI.IsCustomClient() and CPAPI.GetCustomFrame("SpellBookOwner") or SpellBookFrame
 			local SpellBookFrame = CPAPI.IsCustomClient() and CPAPI.GetCustomFrame("SpellBookFrame") or SpellBookFrame 
 
 			if core:IsCurrentNode(owner) then
-				if 	owner and owner:GetParent() == SpellBookOwner and not IsPassiveSpell(id, SpellBookFrame.bookType) then 
+				if 	owner and id and owner:GetParent() == SpellBookOwner and not IsPassiveSpell(id, SpellBookFrame.bookType) then
 					self:AddLine(db.CLICK.USE_NOCOMBAT, 1,1,1)
 					self:AddLine(db.CLICK.PICKUP, 1,1,1) 
 					self:Show()
@@ -195,9 +210,26 @@ function ConsolePort:LoadHookScripts()
 	-- against user's will. The keybinding UI should circumvent this because it exits to the
 	-- game menu frame and cancels the popup, but calls from interface options will be intercepted.
 	local RealSaveBindings = SaveBindings
+
+	-- Shutdown safety. The client calls SaveBindings itself during logout and
+	-- during Exit Game. Raising a StaticPopup at that moment leaves the client
+	-- waiting for an answer it can never be given -- which is exactly what makes
+	-- "Exit Game" look like a hang instead of quitting. Once we are on the way
+	-- out, never prompt: ConsolePort re-applies its calibration bindings from
+	-- saved variables on the next load, so there is nothing to lose by skipping.
+	local isLoggingOut = false
+	local logoutWatcher = CreateFrame('Frame')
+	for _, event in pairs({'PLAYER_LOGOUT', 'PLAYER_QUITING', 'PLAYER_CAMPING'}) do
+		pcall(logoutWatcher.RegisterEvent, logoutWatcher, event)
+	end
+	logoutWatcher:SetScript('OnEvent', function() isLoggingOut = true end)
+
 	function SaveBindings(set)
 		if db('allowSaveBindings') then
 			RealSaveBindings(set)
+			return
+		end
+		if isLoggingOut then
 			return
 		end
 		local info = debugstack(2) -- get debug info

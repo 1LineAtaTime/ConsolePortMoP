@@ -22,8 +22,14 @@ ab.data = db
 
 Bar:SetAttribute('actionpage', now)
 Bar:SetFrameRef('ActionBar', MainMenuBarArtFrame)
-Bar:SetFrameRef('BonusActionBar', BonusActionBarFrame)  
---Bar:SetFrameRef('OverrideBar', OverrideActionBar)
+-- MoP: BonusActionBarFrame was replaced by OverrideActionBar in Cataclysm.
+-- SetFrameRef with a nil frame errors, so pick whichever the client has.
+if BonusActionBarFrame then
+	Bar:SetFrameRef('BonusActionBar', BonusActionBarFrame)
+end
+if OverrideActionBar then
+	Bar:SetFrameRef('OverrideBar', OverrideActionBar)
+end
 Bar:SetFrameRef('Cursor', ConsolePortRaidCursor)
 Bar:SetFrameRef('Mouse', ConsolePortMouseHandle)
 
@@ -191,6 +197,33 @@ function Bar:UPDATE_BONUS_ACTIONBAR()
 	WrapperLib:UpdateAllBindings()
 end
 
+-- 3.3.5 ran vehicles, possession and stances all through the bonus bar, so this
+-- one handler covered every case. MoP gives each of them its own event and
+-- leaves the bonus bar alone, so without these aliases the bar was simply never
+-- told to rebuild when the player got into a vehicle.
+-- UpdateAllBindings bails out in combat by design; the icon repaint that
+-- matters mid-fight is handled insecurely in Libs/ActionButton.lua instead.
+Bar.UPDATE_VEHICLE_ACTIONBAR  = Bar.UPDATE_BONUS_ACTIONBAR
+Bar.UPDATE_OVERRIDE_ACTIONBAR = Bar.UPDATE_BONUS_ACTIONBAR
+Bar.UPDATE_POSSESS_BAR        = Bar.UPDATE_BONUS_ACTIONBAR
+
+-- OnLoad already pushes the page down to the buttons once it has built them
+-- (the control:RunAttribute('_onstate-page') at the end of it), but OnLoad runs
+-- on ADDON_LOADED -- early enough that the client has not necessarily settled
+-- which bar page, stance or form the character is actually in. Until something
+-- moves the page again the buttons keep whatever they were given there, which
+-- is how logging in stealthed or in a form ends up drawing page-1 icons.
+-- Asking once more at PLAYER_LOGIN costs nothing and closes that window.
+function Bar:SyncActionPage()
+	if not InCombatLockdown() then
+		self:Execute([[ control:RunAttribute('UpdateActionBar') ]])
+	end
+end
+
+function Bar:PLAYER_LOGIN()
+	self:SyncActionPage()
+end
+
 function Bar:LoadReticleSpells()
 	Bar:Execute('wipe(reticleSpellManifest)')
 	local reticleSpells = ab.manifest and ab.manifest.ReticleSpells
@@ -226,7 +259,14 @@ function Bar:ADDON_LOADED(name)
 		self:LoadReticleSpells()
 		self:OnLoad(ConsolePortBarSetup)
 		self:UnregisterEvent('ADDON_LOADED')
-		self:RegisterEvent('UPDATE_BONUS_ACTIONBAR')
+		-- pcall: an event name this build does not know would otherwise take
+		-- the whole ADDON_LOADED handler down and leave the bar half-built.
+		for _, event in ipairs({
+			'UPDATE_BONUS_ACTIONBAR',
+			'UPDATE_VEHICLE_ACTIONBAR',
+			'UPDATE_OVERRIDE_ACTIONBAR',
+			'UPDATE_POSSESS_BAR',
+		}) do pcall(self.RegisterEvent, self, event) end
 		self.ADDON_LOADED = nil
 	end
 end
@@ -655,9 +695,23 @@ for name, script in pairs({
 	['_onstate-page'] = [[
 		control:RunAttribute('UpdateActionBar')
 	]],
+	-- This was cut down to bonus-offset-plus-six for 3.3.5, where the restricted
+	-- environment whitelisted neither the Has*ActionBar predicates nor the
+	-- Get*BarIndex accessors. 5.4.8 whitelists all of them (see its
+	-- RestrictedEnvironment.lua), so ask the client for the page instead of
+	-- guessing -- which is what the core already does in Config/Lookup.lua.
+	-- Order matters and mirrors Blizzard's own ActionBarController_UpdateAll.
 	['UpdateActionBar'] = [[
-		if GetBonusBarOffset() > 0 then
-			newstate = GetBonusBarOffset()+6
+		if HasVehicleActionBar and HasVehicleActionBar() and GetVehicleBarIndex then
+			newstate = GetVehicleBarIndex()
+		elseif HasOverrideActionBar and HasOverrideActionBar() and GetOverrideBarIndex then
+			newstate = GetOverrideBarIndex()
+		elseif HasTempShapeshiftActionBar and HasTempShapeshiftActionBar() and GetTempShapeshiftBarIndex then
+			newstate = GetTempShapeshiftBarIndex()
+		elseif HasBonusActionBar and HasBonusActionBar() and GetBonusBarIndex and GetActionBarPage() == 1 then
+			newstate = GetBonusBarIndex()
+		elseif GetBonusBarOffset() > 0 then
+			newstate = GetBonusBarOffset() + 6
 		else
 			newstate = GetActionBarPage()
 		end
@@ -714,12 +768,49 @@ Bar.isForbidden = true
 
 RegisterStateDriver(Bar, 'page', state)
 
-local ov_driver = {}
-table.insert(ov_driver, "[bonusbar:5]11") 
-for i=1, 4 do
-	table.insert(ov_driver, string.format("[bonusbar:%s]%s",i, i))
+-- The values these two drivers produce are never used as a page number --
+-- '_onstate-override' and '_onstate-override_hidden' both just call
+-- UpdateActionBar, which asks the client for the real page. The values only
+-- have to CHANGE when the state changes, so that the handler fires at all.
+--
+-- That is why the conditional list matters. 3.3.5 only had [bonusbar:n] and
+-- [vehicleui]; Cataclysm added [overridebar] and [possessbar], and MoP uses
+-- them for quest/scenario override bars and for mind control -- neither of
+-- which sets bonusbar:5. Without them listed, entering an override bar never
+-- changed the state, the handler never ran, and the bar kept showing the
+-- player's normal page while the vehicle bar was up.
+--
+-- The trailing '0' is the default arm: without it the state goes to nil on the
+-- way back out, and the return to page 1 can be missed.
+-- Only conditionals this client actually parses go in; see
+-- ConsolePort:IsMacroConditionSupported in ConsolePort/Config/Lookup.lua.
+-- [overridebar] and [possessbar] are Cataclysm additions and are expected to be
+-- here, but an unknown conditional makes RegisterStateDriver reject the entire
+-- string, which would take action-bar paging out completely. Not worth guessing.
+local function Supported(condition)
+	return ConsolePort.IsMacroConditionSupported
+		and ConsolePort:IsMacroConditionSupported(condition)
 end
 
-RegisterStateDriver(Bar, 'override_hidden', '[bonusbar:1][bonusbar:2][bonusbar:3][bonusbar:4][bonusbar:5] show; hide')
+local extraStates = {}
+for _, condition in ipairs({'overridebar', 'vehicleui', 'possessbar'}) do
+	if Supported(condition) then
+		table.insert(extraStates, ('[%s]'):format(condition))
+	end
+end
+local extraPrefix = table.concat(extraStates)
+
+local ov_driver = {}
+if extraPrefix ~= '' then
+	table.insert(ov_driver, extraPrefix .. '5')
+end
+table.insert(ov_driver, '[bonusbar:5]5')
+for i = 1, 4 do
+	table.insert(ov_driver, string.format('[bonusbar:%d]%d', i, i))
+end
+table.insert(ov_driver, '0')
+
+RegisterStateDriver(Bar, 'override_hidden',
+	extraPrefix .. '[bonusbar:1][bonusbar:2][bonusbar:3][bonusbar:4][bonusbar:5] show; hide')
 RegisterStateDriver(Bar, 'override', table.concat(ov_driver, ';'))
-RegisterStateDriver(Bar, 'modifier', '[mod:ctrl,mod:shift] CTRL-SHIFT-; [mod:ctrl] CTRL-; [mod:shift] SHIFT-; ')
+RegisterStateDriver(Bar, 'modifier', '[mod:ctrl,mod:shift] CTRL-SHIFT-; [mod:ctrl] CTRL-; [mod:shift] SHIFT-; ')

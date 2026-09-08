@@ -19,6 +19,8 @@ do
 	UIHider:Hide()
 	Bar.UIHider = UIHider
 
+	-- Nil entries here are simply skipped by the table constructor, so the
+	-- WotLK-only names (VehicleMenuBar, BonusActionBarFrame) are harmless.
 	for _, bar in pairs({
 		MainMenuBarArtFrame,
 		MainMenuBarMaxLevelBar,
@@ -34,9 +36,12 @@ do
 
 	MainMenuBarArtFrame:Hide()
 
-	-- Hide MultiBar Buttons, but keep the bars alive
+	-- Hide MultiBar Buttons, but keep the bars alive.
+	-- MoP: there is no BonusActionButton set -- bonus/stance bars are paged onto
+	-- ActionButton1-12 -- so the name below resolved to nil and this loop errored
+	-- at load, which is what kept ConsolePortBar from starting at all.
 	for _, n in pairs({
-		'ActionButton',	
+		'ActionButton',
 		'BonusActionButton',
 		'MultiBarLeftButton',
 		'MultiBarRightButton',
@@ -44,18 +49,83 @@ do
 		'MultiBarBottomRightButton'	}) do
 		for i=1, 12 do
 			local b = _G[n .. i]
-			b:Hide()
-			b:UnregisterAllEvents()
-			b:SetAttribute('statehidden', true)
+			if b then
+				b:Hide()
+				b:UnregisterAllEvents()
+				b:SetAttribute('statehidden', true)
+			end
 		end
 	end
 
-	UIPARENT_MANAGED_FRAME_POSITIONS['MainMenuBar'] = nil
-	UIPARENT_MANAGED_FRAME_POSITIONS['BonusActionBar'] = nil
-	UIPARENT_MANAGED_FRAME_POSITIONS['ShapeshiftBarFrame'] = nil
-	UIPARENT_MANAGED_FRAME_POSITIONS['StanceBarFrame'] = nil
-	UIPARENT_MANAGED_FRAME_POSITIONS['PossessBarFrame'] = nil
-	UIPARENT_MANAGED_FRAME_POSITIONS['PETACTIONBAR_YPOS'] = nil
+	-- MoP's UIPARENT_MANAGED_FRAME_POSITIONS drops ShapeshiftBarFrame/BonusActionBar
+	-- and adds ExtraActionBarFrame, so clear the MoP keys too. Harmless where a
+	-- key does not exist.
+	for _, key in pairs({
+		'MainMenuBar', 'BonusActionBar', 'ShapeshiftBarFrame', 'StanceBarFrame',
+		'PossessBarFrame', 'PETACTIONBAR_YPOS', 'MULTICASTACTIONBAR_YPOS',
+		'MultiCastActionBarFrame', 'ExtraActionBarFrame' }) do
+		UIPARENT_MANAGED_FRAME_POSITIONS[key] = nil
+	end
+
+	-------------------------------------------
+	--- 	Micro buttons
+	-------------------------------------------
+	-- On 3.3.5 these are children of MainMenuBarArtFrame, so hiding that frame
+	-- hid them for free. In MoP they are parented directly to UIParent, so they
+	-- stayed on screen -- a live audit found 12 of the 13 still visible. Hide
+	-- them explicitly and keep them hidden: MainMenuBarMicroButtons.lua calls
+	-- UpdateMicroButtons() constantly and will happily re-Show them. Reparenting
+	-- to a hidden frame wins that fight permanently -- a :Show() on a child of a
+	-- hidden parent still paints nothing.
+	--
+	-- Their events are deliberately LEFT REGISTERED. ConsolePortUI_Menu drives
+	-- these same buttons with '/click <name>' macros (Menu_Frame.lua:968), and
+	-- /click works on a hidden button but NOT on a disabled one -- so
+	-- UpdateMicroButtons() must keep running to maintain the enabled state.
+	if type(MICRO_BUTTONS) == 'table' then
+		local microHider = CreateFrame('Frame')
+		microHider:Hide()
+		for _, name in pairs(MICRO_BUTTONS) do
+			local button = _G[name]
+			if button then
+				button:SetParent(microHider)
+				button:Hide()
+			end
+		end
+		-- MicroButtonPulse draws attention to a button we have hidden; silence it.
+		if MicroButtonPulse then
+			MicroButtonPulse = function() end
+		end
+
+		-- Blizzard_AchievementUI.lua:816 does:
+		--     if ( not AchievementMicroButton:IsShown() ) then
+		--         AchievementMicroButton_Update();
+		--     end
+		-- and AchievementMicroButton_Update is defined NOWHERE in 5.4.8 -- that
+		-- line is a latent bug in the stock client. It never fires normally
+		-- because the micro button is always shown; hiding the micro buttons (just
+		-- above) makes the guard true and the nil call real, once per
+		-- CRITERIA_UPDATE. Define the missing function rather than un-hide the
+		-- button. A no-op is correct: the real function does not exist on this
+		-- client, so nothing can depend on it doing anything.
+		if not AchievementMicroButton_Update then
+			AchievementMicroButton_Update = function() end
+		end
+	end
+
+	-------------------------------------------
+	--- 	ActionBarController
+	-------------------------------------------
+	-- New in Cataclysm and load-bearing: on every vehicle, stance and pet-battle
+	-- transition it runs MultiActionBar_Update, UIParent_ManageFramePositions and
+	-- ValidateActionBarTransition, which re-Show MainMenuBar, MultiBarRight and
+	-- OverrideActionBar with slide animations -- fighting this addon each time.
+	-- Bartender and Dominos solve it the same way. ConsolePort drives its own
+	-- paging from Core/Bar.lua, so nothing here needs the controller.
+	if ActionBarController then
+		ActionBarController:UnregisterAllEvents()
+		ActionBarController:SetParent(UIHider)
+	end
 
 	MainMenuBar:EnableMouse(false)
 	if MicroButtonAndBagsBar then MicroButtonAndBagsBar:Hide() end
@@ -73,13 +143,47 @@ do
 	-------------------------------------------
 
 	for _, bar in pairs({
-		ShapeshiftBarFrame,
-		StanceBarFrame,
+		ShapeshiftBarFrame,		-- 3.3.5 only
+		StanceBarFrame,			-- MoP name for the same thing
 		PossessBarFrame,
+		OverrideActionBar,		-- MoP: the skinned vehicle/override bar
+		MultiCastActionBarFrame,
 		PetActionBarFrame	}) do
 		bar:UnregisterAllEvents()
 		bar:SetParent(UIHider)
 		bar:Hide()
+	end
+
+	-- ExtraActionBarFrame is deliberately NOT hidden: it holds a real, usable
+	-- button (boss abilities, quest items) that ConsolePort binds through
+	-- action slot 169. Detach it from MainMenuBar -- which we have just hidden,
+	-- and which would drag it out of sight -- and park it above the bar instead.
+	if ExtraActionBarFrame then
+		ExtraActionBarFrame:SetParent(UIParent)
+		ExtraActionBarFrame:ClearAllPoints()
+		ExtraActionBarFrame:SetPoint('BOTTOM', UIParent, 'BOTTOM', 0, 220)
+	end
+
+	-- Pet battles take over the whole screen. The ConsolePort bar must get out
+	-- of the way while one is running, or it draws on top of the battle UI.
+	--
+	-- This cannot hook PetBattleFrame directly: Blizzard_PetBattleUI is
+	-- LoadOnDemand, so at the time this file runs the frame does not exist yet.
+	-- The events themselves are always available.
+	if C_PetBattles then
+		local petBattleWatcher = CreateFrame('Frame')
+		petBattleWatcher:RegisterEvent('PET_BATTLE_OPENING_START')
+		petBattleWatcher:RegisterEvent('PET_BATTLE_CLOSE')
+		petBattleWatcher:RegisterEvent('PET_BATTLE_OVER')
+		petBattleWatcher:SetScript('OnEvent', function(self, event)
+			local inBattle = ( event == 'PET_BATTLE_OPENING_START' )
+			Bar:SetAlpha(inBattle and 0 or 1)
+			-- EnableMouse is protected on a secure frame; a pet battle counts as
+			-- combat lockdown, so only take the mouse away when it is legal to.
+			if not InCombatLockdown() then
+				Bar:EnableMouse(not inBattle)
+			end
+		end)
 	end
 
 	-------------------------------------------
@@ -237,8 +341,11 @@ do
 	--- 	Misc changes
 	-------------------------------------------
 
-	if ObjectiveTrackerFrame then
-		ObjectiveTrackerFrame:SetPoint('TOPRIGHT', MinimapCluster, 'BOTTOMRIGHT', -100, -132)
+	-- MoP's quest tracker is WatchFrame; ObjectiveTrackerFrame is Legion, so this
+	-- guard was never true on this client and the tracker was never repositioned.
+	local tracker = ObjectiveTrackerFrame or WatchFrame
+	if tracker and MinimapCluster then
+		tracker:SetPoint('TOPRIGHT', MinimapCluster, 'BOTTOMRIGHT', -100, -132)
 	end
 	AlertFrame:SetPoint('BOTTOM', UIParent, 'BOTTOM', 0, 200)
 

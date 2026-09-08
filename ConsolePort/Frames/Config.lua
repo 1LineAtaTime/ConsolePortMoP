@@ -69,7 +69,13 @@ do
 end
 
 do
-	local strip = Config:CreateTexture(nil, "ARTWORK", nil, 10)
+	-- 5.4.8 clamps texture sublevel to -8..7 and RAISES on anything outside it.
+	-- A sublevel of 10 here killed this file in its main chunk, so WindowMixin,
+	-- AddPanel, CreateConfigPanel, LoadSettings and OpenCategory were never
+	-- defined -- which is what left the settings window completely empty and
+	-- produced the cascade of "attempt to call method 'AddPanel' (a nil value)"
+	-- errors from every satellite addon. 7 is the top of the legal range.
+	local strip = Config:CreateTexture(nil, "ARTWORK", nil, 7)
 	strip:SetPoint("TOPLEFT")
 	strip:SetPoint("TOPRIGHT")
 	strip:SetHeight(3)
@@ -936,7 +942,19 @@ function WindowMixin:AddPanel(info)
 	if onCreate then onCreate(frame, ConsolePort) end
 	if onLoad then
 		frame:SetScript("OnShow", function(self)
-			self:onLoad(ConsolePort)
+			-- Panel bodies are built lazily on first show. An error in here used
+			-- to vanish silently -- leaving the window as bare art with an empty
+			-- body -- whenever the client had script errors switched off. Report
+			-- it in chat instead, and keep the rest of the window usable.
+			local ok, err = pcall(self.onLoad, self, ConsolePort)
+			if not ok then
+				local msg = ('|cffff5555ConsolePort:|r panel "%s" failed to build: %s'):format(tostring(name), tostring(err))
+				if DEFAULT_CHAT_FRAME then
+					DEFAULT_CHAT_FRAME:AddMessage(msg)
+				else
+					print(msg)
+				end
+			end
 			self.onLoad = nil
 			self:Hide()
 			self:SetScript("OnShow", self.OnShow)
@@ -994,6 +1012,11 @@ function WindowMixin:OnShow()
 	if not InCombatLockdown() then
 		self:RegisterEvent("PLAYER_REGEN_DISABLED")
 		self:RegisterEvent("PLAYER_REGEN_ENABLED")
+		-- reset each time the window opens, so a stale "consume" state from a
+		-- previous session can never leave Escape dead
+		if self.SetPropagateKeyboardInput then
+			self:SetPropagateKeyboardInput(true)
+		end
 		SetSaveShortCut(self)
 	else
 		self:Hide()
@@ -1016,12 +1039,26 @@ function WindowMixin:OnEvent(event)
 	end
 end
 
-function WindowMixin:OnKeyUp(key) end
+-- A frame with EnableKeyboard(true) swallows EVERY key, Escape included, for as
+-- long as it holds focus. Upstream paired that with SetPropagateKeyboardInput so
+-- only the two tab keys are consumed; the 3.3.5 backport commented every one of
+-- those calls out because the API did not exist there. It does exist in 5.4.8
+-- (UI.xsd carries propagateKeyboardInput), so restore the pairing -- this is why
+-- Escape would stop working until a /reload.
+function WindowMixin:OnKeyUp(key)
+	if self.SetPropagateKeyboardInput then
+		self:SetPropagateKeyboardInput(true)
+	end
+end
 
 function WindowMixin:OnKeyDown(key)
 	local t1 = GetBindingKey("CP_T1")
 	local t2 = GetBindingKey("CP_T2")
 	if key == t1 or key == t2 then
+		-- consume only the tab-switch keys
+		if self.SetPropagateKeyboardInput then
+			self:SetPropagateKeyboardInput(false)
+		end
 		local containerID   = self.Container.id
 		local numCategories = #Category.Buttons
 		if containerID then
@@ -1031,6 +1068,9 @@ function WindowMixin:OnKeyDown(key)
 				self:OpenCategory(containerID + 1)
 			end
 		end
+	elseif self.SetPropagateKeyboardInput then
+		-- everything else -- Escape above all -- goes through to the game
+		self:SetPropagateKeyboardInput(true)
 	end
 end
 

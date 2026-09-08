@@ -45,6 +45,25 @@ lib.unusedOverlays = lib.unusedOverlays or {}
 lib.numOverlays = lib.numOverlays or 0
 
 local tinsert, tremove, tostring = table.insert, table.remove, tostring
+local AnimateTexCoords = AnimateTexCoords
+
+-- Restored from upstream. The backport pointed the overlay's OnUpdate at
+-- Blizzard's ActionButton_OverlayGlowOnUpdate, which animates its OWN ants
+-- sheet: 256x256, 48px cells, 22 frames. ConsolePort ships a different sheet
+-- (Textures\Ants.blp, 512x512, 96px cells, 25 frames), so driving it with
+-- Blizzard's numbers walks off the end of the atlas and the ants crawl through
+-- garbage. Same maths, this addon's dimensions.
+local function OverlayGlow_OnUpdate(self, elapsed)
+	AnimateTexCoords(self.ants, 512, 512, 96, 96, 25, elapsed, 0.01)
+	local cooldown = self:GetParent().cooldown
+	-- Threshold avoids dimming the glow during the global cooldown.
+	if ( cooldown and cooldown:IsShown() and cooldown.GetCooldownDuration
+		and cooldown:GetCooldownDuration() > 3000 ) then
+		self:SetAlpha(0.5)
+	else
+		self:SetAlpha(1.0)
+	end
+end
 
 local function OverlayGlowAnimOutFinished(animGroup)
 	local overlay = animGroup:GetParent()
@@ -191,10 +210,8 @@ local function CreateOverlayGlow()
 	overlay.animOut:SetScript("OnFinished", OverlayGlowAnimOutFinished)
 
 	-- scripts
-	overlay:SetScript("OnUpdate", ActionButton_OverlayGlowOnUpdate)
+	overlay:SetScript("OnUpdate", OverlayGlow_OnUpdate)
 	overlay:SetScript("OnHide", OverlayGlow_OnHide)
-
-	overlay.__LBGVersion = MINOR_VERSION
 
 	return overlay
 end

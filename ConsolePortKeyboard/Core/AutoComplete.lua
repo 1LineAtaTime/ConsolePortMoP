@@ -31,7 +31,9 @@ local suggestions = {}
 -- EditBox Auto complete widget
 ---------------------------------------------------------------
 local Auto = CreateFrame("EditBox", "$parentAuto", Keyboard)
---Auto:Disable()
+-- Restored for the same reason as Mime in Mime.lua: an enabled EditBox owned by
+-- the keyboard can take focus and trap the keyboard open forever.
+Auto:Disable()
 Auto:SetPoint("CENTER", Keyboard, "CENTER", 0, -90)
 Auto:SetSize(1, 1)
 Auto.Text = Auto:CreateFontString("$parentTextCurrent", "BACKGROUND")

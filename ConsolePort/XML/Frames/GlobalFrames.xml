@@ -85,14 +85,27 @@
 			<Layer level="OVERLAY">
 				<FontString parentKey="Count" inherits="GameFontNormal">
 					<Anchors>
-						<Anchor point="BOTTOMRIGHT" relativeTo="$parent.Icon" x="4" y="4"/>
+						<!-- 5.4.8: a dotted "$parent.Key" relativeTo is a Legion era spelling.
+						     This client resolves relativeTo by NAME only, silently drops
+						     the anchor when it cannot, and reports nothing, so this count
+						     sat at the frame origin instead of on the icon.
+						     ConsolePortPopupFrameTemplate names the texture $parentIcon. -->
+						<Anchor point="BOTTOMRIGHT" relativeTo="$parentIcon" x="4" y="4"/>
 					</Anchors>
 				</FontString>
 			</Layer>
 		</Layers>
 		<Scripts>
-			<OnMouseDown method="StartMoving"/>
-			<OnMouseUp method="StopMovingOrSizing"/>
+			<!-- 5.4.8: method="" on a script handler is a Legion era spelling. This
+			     client's XML parser has no such attribute, so neither handler was
+			     ever installed and this movable="true" frame could not be dragged.
+			     A plain script body does the same job. -->
+			<OnMouseDown>
+				self:StartMoving();
+			</OnMouseDown>
+			<OnMouseUp>
+				self:StopMovingOrSizing();
+			</OnMouseUp>
 		</Scripts>
 	</Frame>
 
@@ -144,7 +157,7 @@
 					justifyH="LEFT">
 					<Anchors>
 						<Anchor point="TOPLEFT"
-							relativeTo="$parent.Desc"
+							relativeTo="$parentDesc"
 							relativePoint="BOTTOMLEFT"/>
 					</Anchors>
 				</FontString>
@@ -152,8 +165,16 @@
 		</Layers>
 	
 		<Scripts>
-			<OnMouseDown method="StartMoving"/>
-			<OnMouseUp method="StopMovingOrSizing"/>
+			<!-- 5.4.8: method="" on a script handler is a Legion era spelling. This
+			     client's XML parser has no such attribute, so neither handler was
+			     ever installed and this movable="true" frame could not be dragged.
+			     A plain script body does the same job. -->
+			<OnMouseDown>
+				self:StartMoving();
+			</OnMouseDown>
+			<OnMouseUp>
+				self:StopMovingOrSizing();
+			</OnMouseUp>
 		</Scripts>
 	</Frame>
 
@@ -175,10 +196,10 @@
 				<Texture parentKey="Highlight">
 					<Animations>
 						<AnimationGroup parentKey="Scale">
-							<Scale parentKey="Enlarge" childKey="Highlight" smoothing="OUT" duration=".1" order="1">
+							<Scale parentKey="Enlarge" targetKey="$parent.$parent.Highlight" smoothing="OUT" duration=".1" order="1">
 								<Origin point="CENTER"/>
 							</Scale>
-							<Scale parentKey="Shrink" childKey="Highlight" smoothing="IN" duration=".2" order="2">
+							<Scale parentKey="Shrink" targetKey="$parent.$parent.Highlight" smoothing="IN" duration=".2" order="2">
 								<Origin point="CENTER"/>
 							</Scale>
 						</AnimationGroup>
@@ -573,10 +594,10 @@
 				</Layers>
 				<Animations>
 					<AnimationGroup parentKey="Group">
-						<Alpha childKey="TopArrow" fromAlpha="0" toAlpha="1" duration=".7" order="1"/>
-						<Alpha childKey="BottomArrow" fromAlpha="0" toAlpha="1" duration=".7" order="1"/>
-						<Scale childKey="TopArrow" smoothing="OUT" duration=".5" order="1" fromScaleX="1" fromScaleY="0" toScaleX="1" toScaleY="1"/>
-						<Scale childKey="BottomArrow" smoothing="OUT" duration=".5" order="1" fromScaleX="1" fromScaleY="0" toScaleX="1" toScaleY="1"/>
+						<Alpha targetKey="$parent.$parent.TopArrow" change="1" duration=".7" order="1"/>
+						<Alpha targetKey="$parent.$parent.BottomArrow" change="1" duration=".7" order="1"/>
+						<Scale targetKey="$parent.$parent.TopArrow" smoothing="OUT" duration=".5" order="1" scaleX="1" scaleY="1"/>
+						<Scale targetKey="$parent.$parent.BottomArrow" smoothing="OUT" duration=".5" order="1" scaleX="1" scaleY="1"/>
 					</AnimationGroup>
 				</Animations>
 				<Scripts>

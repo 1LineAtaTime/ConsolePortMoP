@@ -353,7 +353,10 @@ function SliceMask:StartCooldown(button, start, duration)
     container._cooldownDuration = duration
     container._button           = button
 
-    container:SetScript('OnUpdate', function(self)
+    -- `elapsed` is referenced further down but was never declared as a
+    -- parameter, so it resolved to a nil global -- an arithmetic error the
+    -- moment the cooldown pop animation runs.
+    container:SetScript('OnUpdate', function(self, elapsed)
         local now       = GetTime()
         local remaining = (self._cooldownStart + self._cooldownDuration) - now
 

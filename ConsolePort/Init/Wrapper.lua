@@ -40,41 +40,61 @@ function CPAPI:GetPlayerCastingInfo()
 	return CastingInfo()
 end
 
-function CPAPI.GetSpecialization()
-	local classes = {["WARRIOR"]=1, ["PALADIN"]=2, ["HUNTER"]=3, ["ROGUE"]=4, ["PRIEST"]=5, ["DEATHKNIGHT"]=6,["SHAMAN"]=7,["MAGE"]=8,["WARLOCK"]=9,["DRUID"]=10}
-	local vln, vlfn = UnitClass("player");  
-	return classes[vlfn] or 1;
-end
+---------------------------------------------------------------
+-- Specialization
+---------------------------------------------------------------
+-- MoP (5.4.8) has the real specialization API. On 3.3.5 there was none,
+-- so the LK port fabricated a per-class index and reconstructed a "spec"
+-- from talent-tab point counts (code lifted from ElvUI-WOTLK). Both of
+-- those APIs -- GetActiveTalentGroup and GetTalentTabInfo -- were removed
+-- in Cataclysm, so on MoP that path errors. Prefer the real API and keep
+-- the old one only as a fallback for older clients.
+
+local LEGACY_CLASS_INDEX = {
+	['WARRIOR'] = 1, ['PALADIN'] = 2, ['HUNTER']  = 3, ['ROGUE']   = 4,
+	['PRIEST']  = 5, ['DEATHKNIGHT'] = 6, ['SHAMAN'] = 7, ['MAGE'] = 8,
+	['WARLOCK'] = 9, ['DRUID'] = 10, ['MONK'] = 11,
+}
 
 local function CP_GetTalentSpecInfo(isInspect)
-	-- Taken from ElvUI-WOTLK
-
-	local talantGroup = GetActiveTalentGroup(isInspect)
+	if not (GetActiveTalentGroup and GetTalentTabInfo) then return end
+	local talentGroup = GetActiveTalentGroup(isInspect)
 	local maxPoints, specIdx, specName, specIcon = 0, 0
 
-	for i = 1, MAX_TALENT_TABS do
-		local name, icon, pointsSpent = GetTalentTabInfo(i, isInspect, nil, talantGroup)
-		if maxPoints < pointsSpent then
-			maxPoints = pointsSpent
-			specIdx = i
-			specName = name
-			specIcon = icon
+	for i = 1, (MAX_TALENT_TABS or 3) do
+		local name, icon, pointsSpent = GetTalentTabInfo(i, isInspect, nil, talentGroup)
+		if pointsSpent and maxPoints < pointsSpent then
+			maxPoints, specIdx, specName, specIcon = pointsSpent, i, name, icon
 		end
 	end
 
-	if not specName then
-		specName = NONE
-	end
-	if not specIcon then
-		specIcon = "Interface\\Icons\\INV_Misc_QuestionMark"
-	end
+	return specIdx, specName or NONE, specIcon or [[Interface\Icons\INV_Misc_QuestionMark]]
+end
 
-	return specIdx, specName, specIcon
+function CPAPI.GetSpecialization()
+	-- MoP: real spec index, 1-4. Returns nil before a spec is chosen (below
+	-- level 10). Fall back to 1, NOT to a class index -- this value is fed to
+	-- GetSpecializationInfo and used as the ConsolePortBindingSet key, so the
+	-- two number spaces must not be mixed or bindings get orphaned on respec.
+	if _G.GetSpecialization then
+		return _G.GetSpecialization() or 1
+	end
+	local specIdx = CP_GetTalentSpecInfo()
+	if specIdx and specIdx > 0 then
+		return specIdx
+	end
+	return LEGACY_CLASS_INDEX[GetClassFile()] or 1
 end
 
 function CPAPI.GetSpecializationInfo(specID)
-	_, specName, _ = CP_GetTalentSpecInfo()
-	return specID, specName;
+	if _G.GetSpecializationInfo then
+		-- Callers expect a usable name (it is string.format'd into the profile
+		-- label), so never let a nil spec index produce a nil name.
+		local id, name = _G.GetSpecializationInfo(specID)
+		return id or specID, name or NONE
+	end
+	local _, specName = CP_GetTalentSpecInfo()
+	return specID, specName or NONE
 end
 
 function CPAPI:GetSpecTextureByID(ID)
@@ -101,9 +121,17 @@ function CPAPI:GetClassColor(class)
 end
 
 function CPAPI:GetCharacterMetadata()
-	-- returns specID, specName on retail
+	-- MoP: real specID + localized spec name.
+	-- (The 3.3.5 line here called GetSpecializaton() -- a typo that only
+	--  became reachable once the guard above started passing.)
 	if GetSpecializationInfo and GetSpecialization then
-		return GetSpecializationInfo(GetSpecializaton())
+		local specIndex = GetSpecialization()
+		if specIndex then
+			local specID, specName = GetSpecializationInfo(specIndex)
+			if specID then
+				return specID, specName
+			end
+		end
 	end
 	-- returns classID, localized class token on classic
 	return GetClassID(), GetClassInfo()
@@ -174,8 +202,18 @@ function CPAPI:UnitThreatSituation(...)
 	return UnitThreatSituation and UnitThreatSituation(...)
 end
 
-function CPAPI:IsPlayerAtEffectiveMaxLevel() 
-	return UnitLevel("player") >= MAX_PLAYER_LEVEL_TABLE[GetAccountExpansionLevel()];
+function CPAPI:IsPlayerAtEffectiveMaxLevel()
+	-- MoP renamed GetAccountExpansionLevel to GetExpansionLevel. Guard both,
+	-- so a nil index can never error here.
+	-- Note MAX_PLAYER_LEVEL is initialised to 0 at file scope in 5.4.8 and only
+	-- filled in later by ReputationWatchBar_UpdateMaxLevel -- and 0 is truthy in
+	-- Lua, so it has to be tested for non-zero or every character reads as capped.
+	local getLevel = _G.GetExpansionLevel or _G.GetAccountExpansionLevel
+	local cap = getLevel and MAX_PLAYER_LEVEL_TABLE and MAX_PLAYER_LEVEL_TABLE[getLevel()]
+	if not cap and MAX_PLAYER_LEVEL and MAX_PLAYER_LEVEL > 0 then
+		cap = MAX_PLAYER_LEVEL
+	end
+	return UnitLevel('player') >= (cap or 90)
 end
 
 function CPAPI:IsXPUserDisabled(...)
@@ -205,13 +243,102 @@ function CPAPI:OpenStackSplitFrame(...)
 	return StackSplitFrame:OpenStackSplitFrame(...)
 end
 
--- Project identifiers, should return true or nil (nil for dynamic table insertions)
+---------------------------------------------------------------
+-- Spellbook compatibility
+---------------------------------------------------------------
+-- 3.3.5 : SpellBook_GetSpellID(index)   -> spellID
+-- 4.0+  : SpellBook_GetSpellBookSlot(button) -> slot, slotType, slotID
+-- and GameTooltip:SetSpell was replaced by :SetSpellBookItem.
+function CPAPI:GetSpellBookSlot(button)
+	if not button then return end
+	if _G.SpellBook_GetSpellBookSlot then
+		local ok, slot, slotType, slotID = pcall(_G.SpellBook_GetSpellBookSlot, button)
+		if ok then return slot, slotType, slotID end
+	elseif _G.SpellBook_GetSpellID and button.GetID then
+		return _G.SpellBook_GetSpellID(button:GetID())
+	end
+end
+
+function CPAPI:SetTooltipSpellBookItem(tooltip, slot, bookType)
+	if not (tooltip and slot) then return end
+	if tooltip.SetSpellBookItem then
+		return tooltip:SetSpellBookItem(slot, bookType)
+	elseif tooltip.SetSpell then
+		return tooltip:SetSpell(slot, bookType)
+	end
+end
+
+-- 3.3.5 : GetSpellName / GetSpellTexture(index, bookType)
+-- 4.0+  : GetSpellBookItemName / GetSpellBookItemTexture(slot, bookType)
+function CPAPI:GetSpellBookItemName(slot, bookType)
+	if _G.GetSpellBookItemName then
+		return _G.GetSpellBookItemName(slot, bookType)
+	end
+	return _G.GetSpellName and _G.GetSpellName(slot, bookType)
+end
+
+function CPAPI:GetSpellBookItemTexture(slot, bookType)
+	if _G.GetSpellBookItemTexture then
+		return _G.GetSpellBookItemTexture(slot, bookType)
+	end
+	return _G.GetSpellTexture and _G.GetSpellTexture(slot, bookType)
+end
+
+-- 3.3.5 : GetNumMacroIcons() + GetMacroIconInfo(index)
+-- 4.0+  : GetMacroIcons(tbl) / GetMacroItemIcons(tbl) fill a table
+function CPAPI:GetMacroIconList(includeItems)
+	local icons = {}
+	if _G.GetMacroIcons then
+		if includeItems and _G.GetMacroItemIcons then
+			_G.GetMacroItemIcons(icons)
+		end
+		_G.GetMacroIcons(icons)
+		-- MoP fills the table with bare icon NAMES ("INV_MISC_QUESTIONMARK"),
+		-- where 3.3.5's GetMacroIconInfo returned a full texture path. Callers
+		-- feed these straight to SetTexture and persist them, so normalise here.
+		for i = 1, #icons do
+			local icon = icons[i]
+			if type(icon) == 'string' and not icon:find('\\') then
+				icons[i] = [[Interface\Icons\]] .. icon
+			end
+		end
+	elseif _G.GetNumMacroIcons and _G.GetMacroIconInfo then
+		for i = 1, _G.GetNumMacroIcons() do
+			icons[i] = _G.GetMacroIconInfo(i)
+		end
+	end
+	return icons
+end
+
+---------------------------------------------------------------
+-- Project identifiers
+---------------------------------------------------------------
+-- Should return true or nil (nil for dynamic table insertions).
+-- WOW_PROJECT_ID does not exist on 3.3.5 or 5.4.8, so the original
+-- comparisons both evaluated nil == nil and returned true on every
+-- client -- which silently disabled FocusHold and took the retail
+-- branch in ConsolePortBar. Derive the interface number instead.
+-- tonumber() because some custom cores return the toc version as a string,
+-- and this comparison runs at file scope in the first file the TOC loads.
+local TOC_VERSION = tonumber(select(4, GetBuildInfo())) or 0
+CPAPI.TocVersion = TOC_VERSION
+
+function CPAPI:GetTocVersion()
+	return TOC_VERSION
+end
+
 function CPAPI:IsClassicVersion(...)
-	if WOW_PROJECT_ID == WOW_PROJECT_CLASSIC then return true end
+	-- Pre-Cataclysm API shape: no spec system, no override bar, no flyouts.
+	if TOC_VERSION < 40000 then return true end
+end
+
+function CPAPI:IsMoPVersion(...)
+	if TOC_VERSION >= 50000 and TOC_VERSION < 60000 then return true end
 end
 
 function CPAPI:IsRetailVersion(...)
-	if WOW_PROJECT_ID == WOW_PROJECT_MAINLINE then return true end
+	-- Warlords and later: atlases, mixins, object pools, texture masks.
+	if TOC_VERSION >= 60000 then return true end
 end
 
 -- Mixin Implementation
@@ -353,7 +480,10 @@ function CPAPI.TimerAfter(delay, func, ...)
 	end
 	if (CP_TimerAfterFrame == nil) then
 	  CP_TimerAfterFrame = CreateFrame("Frame","CP_TimerAfterFrame", UIParent);
-	  CP_TimerAfterFrame:SetScript("onUpdate",function (self,elapse)
+	  -- "onUpdate" (lowercase o) is not a valid script handler name. Everything
+	  -- that schedules work through CPAPI.TimerAfter -- menu button fades, the
+	  -- UI stack, cursor refreshes -- depends on this frame actually ticking.
+	  CP_TimerAfterFrame:SetScript("OnUpdate",function (self,elapse)
 		local count = #CP_TimerAfterTable;
 		local i = 1;
 		while(i<=count) do
@@ -575,7 +705,18 @@ function CPCC:CreateTextFor(parentRCooldown)
     return holder
 end
 
+-- These three are keyed by frame NAME, but every caller passes the frame
+-- itself, so the lookups silently missed (and OnUpdate indexed a nil holder
+-- on every tick). Accept either form rather than touching all the call sites.
+local function CPCC_Key(ref)
+    if type(ref) == 'table' then
+        return ref.GetName and ref:GetName() or nil
+    end
+    return ref
+end
+
 function CPCC:StartCooldown(parentname, start, duration)
+    parentname = CPCC_Key(parentname)
     if not self.db.enabled then return end
     if not parentname or not start or not duration then return end
     if duration <= self.db.minDuration then
@@ -588,6 +729,7 @@ function CPCC:StartCooldown(parentname, start, duration)
 
     local fs = self:CreateTextFor(rcool)
     local meta = self.meta[parentname]
+    if not (fs and meta) then return end
     meta.start = start
     meta.duration = duration
     meta.visible = true
@@ -598,6 +740,7 @@ function CPCC:StartCooldown(parentname, start, duration)
 end
 
 function CPCC:StopCooldown(parentname)
+    parentname = CPCC_Key(parentname)
     if not parentname then return end
     local fs = self.texts[parentname]
     local meta = self.meta[parentname]
@@ -612,10 +755,12 @@ function CPCC:StopCooldown(parentname)
 end
 
 function CPCC:OnUpdate(parentname, elapsed)
+    parentname = CPCC_Key(parentname)
     if not self.db.enabled then return end
     if not parentname then return end
     local holder = self.texts[parentname]
-	local fs = holder.fontstring
+    if not holder then return end
+    local fs = holder.fontstring
     local meta = self.meta[parentname]
     if not fs or not meta then return end
     if not meta.visible or meta.duration <= 0 then

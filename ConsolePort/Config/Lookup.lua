@@ -166,14 +166,76 @@ local actionIDs = {
 	[107] 	= 'ACTIONBUTTON11',				[119] 	= 'ACTIONBUTTON11',
 	[108] 	= 'ACTIONBUTTON12',				[120] 	= 'ACTIONBUTTON12',
 
-	-- OverrideBar
+	-- Pages 11-15, read from the live 5.4.8 client rather than guessed:
+	--   GetMultiCastBarIndex()        = 11  -> slots 121-132
+	--   GetVehicleBarIndex()          = 12  -> slots 133-144
+	--   GetTempShapeshiftBarIndex()   = 13  -> slots 145-156
+	--   GetOverrideBarIndex()         = 14  -> slots 157-168
+	--   GetExtraBarIndex()            = 15  -> slots 169-180
+	-- Each page is NUM_ACTIONBAR_BUTTONS (12) slots wide, so page N covers
+	-- (N-1)*12+1 .. N*12. Only 133-138 and 169 existed before, which is why
+	-- hotkey glyphs disappeared on the totem, vehicle, stance and override
+	-- bars -- those slots resolved to nil and were silently dropped.
+	-- (The old comment called 133-138 the OverrideBar; it is really the
+	--  vehicle bar. The override bar is page 14.)
+
+	-- Multi-cast / totem bar (page 11, shaman)
+	[121] 	= 'MULTICASTACTIONBUTTON1',
+	[122] 	= 'MULTICASTACTIONBUTTON2',
+	[123] 	= 'MULTICASTACTIONBUTTON3',
+	[124] 	= 'MULTICASTACTIONBUTTON4',
+	[125] 	= 'MULTICASTACTIONBUTTON5',
+	[126] 	= 'MULTICASTACTIONBUTTON6',
+	[127] 	= 'MULTICASTACTIONBUTTON7',
+	[128] 	= 'MULTICASTACTIONBUTTON8',
+	[129] 	= 'MULTICASTACTIONBUTTON9',
+	[130] 	= 'MULTICASTACTIONBUTTON10',
+	[131] 	= 'MULTICASTACTIONBUTTON11',
+	[132] 	= 'MULTICASTACTIONBUTTON12',
+
+	-- Vehicle bar (page 12)
 	[133] 	= 'ACTIONBUTTON1',
 	[134] 	= 'ACTIONBUTTON2',
 	[135] 	= 'ACTIONBUTTON3',
 	[136] 	= 'ACTIONBUTTON4',
 	[137] 	= 'ACTIONBUTTON5',
 	[138] 	= 'ACTIONBUTTON6',
+	[139] 	= 'ACTIONBUTTON7',
+	[140] 	= 'ACTIONBUTTON8',
+	[141] 	= 'ACTIONBUTTON9',
+	[142] 	= 'ACTIONBUTTON10',
+	[143] 	= 'ACTIONBUTTON11',
+	[144] 	= 'ACTIONBUTTON12',
 
+	-- Temporary shapeshift bar (page 13)
+	[145] 	= 'ACTIONBUTTON1',
+	[146] 	= 'ACTIONBUTTON2',
+	[147] 	= 'ACTIONBUTTON3',
+	[148] 	= 'ACTIONBUTTON4',
+	[149] 	= 'ACTIONBUTTON5',
+	[150] 	= 'ACTIONBUTTON6',
+	[151] 	= 'ACTIONBUTTON7',
+	[152] 	= 'ACTIONBUTTON8',
+	[153] 	= 'ACTIONBUTTON9',
+	[154] 	= 'ACTIONBUTTON10',
+	[155] 	= 'ACTIONBUTTON11',
+	[156] 	= 'ACTIONBUTTON12',
+
+	-- Override bar (page 14)
+	[157] 	= 'ACTIONBUTTON1',
+	[158] 	= 'ACTIONBUTTON2',
+	[159] 	= 'ACTIONBUTTON3',
+	[160] 	= 'ACTIONBUTTON4',
+	[161] 	= 'ACTIONBUTTON5',
+	[162] 	= 'ACTIONBUTTON6',
+	[163] 	= 'ACTIONBUTTON7',
+	[164] 	= 'ACTIONBUTTON8',
+	[165] 	= 'ACTIONBUTTON9',
+	[166] 	= 'ACTIONBUTTON10',
+	[167] 	= 'ACTIONBUTTON11',
+	[168] 	= 'ACTIONBUTTON12',
+
+	-- Extra action button (page 15)
 	[169] 	= 'EXTRAACTIONBUTTON1',
 
 	['StanceButton1']	 	= 'SHAPESHIFTBUTTON1',
@@ -205,21 +267,42 @@ local class = select(2, UnitClass('player'))
 local classReserved = {
 	['WARRIOR'] = 96,
 	['ROGUE'] 	= 84,
-	['DRUID'] 	= 120, 
+	['DRUID'] 	= 120,
 	['PRIEST'] 	= 84,
+	-- MoP: monks page onto bonusbar 1-3 for their stances, so they need the
+	-- same treatment as the other stance classes. The entry was simply never
+	-- added when the class shipped, so monks fell through to the generic
+	-- branch and lost their stance bars entirely.
+	['MONK'] 	= 108,
 }
 
 ---------------------------------------------------------------
 local customRange = classReserved[class]
 local ACTION_ID_RANGE = 72
 local ACTION_ID_STANCE_RANGE = 120
-local ACTION_ID_MAX_THRESHOLD = 169
+local ACTION_ID_MAX_THRESHOLD = 180 -- was 169; the table now runs to the end of page 15
 ---------------------------------------------------------------
 local DefaultBar = MainMenuBarArtFrame
 
 ---------------------------------------------------------------
 -- Functions for grabbing action button data
 ---------------------------------------------------------------
+-- Macro conditionals are evaluated C-side, so they appear nowhere in FrameXML and
+-- cannot be checked by reading the 5.4.8 UI source -- the only honest test is to
+-- ask this client to parse one. A conditional the build does not recognise makes
+-- RegisterStateDriver reject the whole driver string, which would silently kill
+-- action-bar paging, so probe once and cache.
+local supportedConditions = {}
+function ConsolePort:IsMacroConditionSupported(condition)
+    if supportedConditions[condition] == nil then
+        local ok, result = pcall(SecureCmdOptionParse, ('[%s] y; n'):format(condition))
+        -- A conditional this client knows parses to 'y' or 'n'. An unknown one
+        -- either raises or yields something else; treat both as unsupported.
+        supportedConditions[condition] = (ok and (result == 'y' or result == 'n')) and true or false
+    end
+    return supportedConditions[condition]
+end
+
 function ConsolePort:GetActionPageDriver()
     -- generate a macro condition with generic values to ensure any change pushes an update.
     -- the actual bar ID check is done in the pager (Drivers\Pager) instead.
@@ -230,11 +313,25 @@ function ConsolePort:GetActionPageDriver()
     local count, driver = 0, ''
     for i, macroCondition in ipairs({
         ----------------------------------
-        'vehicleui', 'bonusbar:5',
+        -- 'overridebar' and 'possessbar' are Cataclysm additions, so the 3.3.5
+        -- backport had to drop them. MoP puts quest/scenario override bars and
+        -- mind control behind exactly those two conditions, and neither of them
+        -- also sets bonusbar:5 -- without them listed the state never changes,
+        -- GetActionPageResponse never runs, and the pager keeps handing out the
+        -- player's normal page while an override bar is on screen.
+        -- ConsolePort:IsMacroConditionSupported filters the list below, so a
+        -- conditional this build does not know is dropped instead of taking the
+        -- whole state driver down with it.
+        'vehicleui', 'bonusbar:5', 'overridebar', 'possessbar',
         'bar:2', 'bar:3', 'bar:4', 'bar:5', 'bar:6',
         'bonusbar:1', 'bonusbar:2', 'bonusbar:3', 'bonusbar:4'
         ----------------------------------
-    }) do  driver = driver .. conditionFormat:format(macroCondition, i) count = i end
+    }) do
+        if ConsolePort:IsMacroConditionSupported(macroCondition) then
+            count = count + 1
+            driver = driver .. conditionFormat:format(macroCondition, count)
+        end
+    end
     driver = driver .. (count + 1) -- append the list for the default bar (1) when none of the conditions apply.
     ----------------------------------
     return driver, self:GetActionPage()
@@ -595,72 +692,102 @@ end
 -- UI cursor frames to be handled with D-pad
 ---------------------------------------------------------------
 function ConsolePort:GetDefaultUIFrames()
-	return {	
+	-- Rebuilt for 5.4.8 (18414). Every name below was verified against Blizzard's
+	-- own 5.4.8 UI source; the trailing comment is the file that defines it.
+	-- Keys are load-on-demand addon names -- the frame is registered when that
+	-- addon fires ADDON_LOADED. Frames that already exist when ConsolePort loads
+	-- (FrameXML, plus the Blizzard_* addons flagged LoadOnDemand: 0) live under
+	-- the always-loaded 'ConsolePort' key, because their ADDON_LOADED has
+	-- already fired by the time we could register for it.
+	--
+	-- What changed: 21 frames across 5 whole keys were WoD/Legion names that can
+	-- never resolve here (Artifact, Collections, Garrison, DeathRecap, Obliterum
+	-- and friends); 3 were renamed to their MoP equivalents; 33 MoP panels that
+	-- the cursor simply could not reach were added -- Reforging, Item Upgrade,
+	-- Black Market, Glyphs, Void Storage, Transmogrify, the PvP and Group Finder
+	-- tab panels, the pet/mount journal, and the rest.
+	return {
 		Blizzard_AchievementUI 		= {
-			'AchievementFrame' },
+			'AchievementFrame' },				-- Blizzard_AchievementUI.xml
 		Blizzard_ArchaeologyUI 		= {
-			'ArchaeologyFrame' },
-		Blizzard_ArtifactUI 		= {
-			'ArtifactFrame',
-			'ArtifactRelicForgeFrame'},
-		Blizzard_AuctionUI 			= {
-			'AuctionFrame' },
+			'ArchaeologyFrame' },				-- Blizzard_ArchaeologyUI.xml
+		Blizzard_AuctionUI			= {
+			'AuctionFrame' },					-- Blizzard_AuctionUI.xml
 		Blizzard_BarbershopUI		= {
-			'BarberShopFrame' },
+			'BarberShopFrame' },				-- Blizzard_BarberShopUI.xml
+		Blizzard_BindingUI			= {
+			'KeyBindingFrame' },				-- Blizzard_BindingUI.xml
+		Blizzard_BlackMarketUI		= {
+			'BlackMarketFrame' },				-- Blizzard_BlackMarketUI.xml
 		Blizzard_Calendar			= {
-			'CalendarFrame' },
-		Blizzard_ChallengesUI 		= {
-			'ChallengesKeystoneFrame' },
-		Blizzard_Collections		= {
-			'CollectionsJournal',
-			'WardrobeFrame', },
-		Blizzard_DeathRecap			= {
-			'DeathRecapFrame' },
-		Blizzard_EncounterJournal 	= {
-			'EncounterJournal' },
-		Blizzard_GarrisonUI			= {
-			'GarrisonBuildingFrame',
-			'GarrisonCapacitiveDisplayFrame',
-			'GarrisonLandingPage',
-			'GarrisonMissionFrame',
-			'GarrisonMonumentFrame',
-			'GarrisonRecruiterFrame',
-			'GarrisonShipyardFrame',
-			'OrderHallMissionFrame',
-			'OrderHallTalentFrame', },
+			'CalendarFrame' },					-- Blizzard_Calendar.xml
+		Blizzard_ChallengesUI		= {
+			'ChallengesFrame' },				-- Blizzard_ChallengesUI.xml (was ChallengesKeystoneFrame)
+		Blizzard_EncounterJournal	= {
+			'EncounterJournal' },				-- Blizzard_EncounterJournal.xml
+		Blizzard_GMChatUI			= {
+			'GMChatFrame' },					-- Blizzard_GMChatUI.xml
+		Blizzard_GMSurveyUI			= {
+			'GMSurveyFrame' },					-- Blizzard_GMSurveyUI.xml
+		Blizzard_GlyphUI			= {
+			'GlyphFrame' },						-- Blizzard_GlyphUI.xml (reparents to its host on show)
+		Blizzard_GuildBankUI		= {
+			'GuildBankFrame' },					-- Blizzard_GuildBankUI.xml
+		Blizzard_GuildControlUI		= {
+			'GuildControlUI' },					-- Blizzard_GuildControlUI.xml
 		Blizzard_GuildUI			= {
-			'GuildFrame' },
+			'GuildFrame' },						-- Blizzard_GuildUI.xml
 		Blizzard_InspectUI			= {
-			'InspectFrame' },
-		Blizzard_ItemAlterationUI 	= {
-			'TransmogrifyFrame' },
-		Blizzard_LookingForGuildUI 	= {
-			'LookingForGuildFrame' },
-		Blizzard_MacroUI 			= {
-			'MacroFrame' },
-		Blizzard_ObliterumUI 		= {
-			'ObliterumForgeFrame' },
-		Blizzard_QuestChoice 		= {
-			'QuestChoiceFrame' },
-		Blizzard_TalentUI 			= {
-			'PlayerTalentFrame' },
+			'InspectFrame' },					-- Blizzard_InspectUI.xml
+		Blizzard_ItemAlterationUI	= {
+			'TransmogrifyFrame' },				-- Blizzard_ItemAlterationUI.xml
+		Blizzard_ItemSocketingUI	= {
+			'ItemSocketingFrame' },				-- Blizzard_ItemSocketingUI.xml
+		Blizzard_ItemUpgradeUI		= {
+			'ItemUpgradeFrame' },				-- Blizzard_ItemUpgradeUI.xml
+		Blizzard_LookingForGuildUI	= {
+			'LookingForGuildFrame' },			-- Blizzard_LookingForGuildUI.xml
+		Blizzard_MacroUI			= {
+			'MacroFrame' },						-- Blizzard_MacroUI.xml
+		Blizzard_PVPUI				= {
+			'PVPUIFrame',						-- Blizzard_PVPUI.xml (replaces PVPParentFrame)
+			'PVPQueueFrame',					-- Blizzard_PVPUI.xml
+			'HonorFrame',						-- Blizzard_PVPUI.xml
+			'ConquestFrame',					-- Blizzard_PVPUI.xml
+			'WarGamesFrame' },					-- Blizzard_PVPUI.xml
+		Blizzard_PetJournal			= {
+			'PetJournalParent',					-- Blizzard_PetJournal.xml (tab 1 mounts, tab 2 pets)
+			'MountJournal',						-- Blizzard_PetJournal.xml
+			'PetJournal' },						-- Blizzard_PetJournal.xml
+		Blizzard_QuestChoice		= {
+			'QuestChoiceFrame' },				-- Blizzard_QuestChoice.xml
+		Blizzard_ReforgingUI		= {
+			'ReforgingFrame' },					-- Blizzard_ReforgingUI.xml
+		Blizzard_TalentUI			= {
+			'PlayerTalentFrame' },				-- Blizzard_TalentUI.xml
+		Blizzard_TimeManager		= {
+			'TimeManagerFrame',					-- Blizzard_TimeManager.xml (LoadOnDemand)
+			'StopwatchFrame' },					-- Blizzard_TimeManager.xml
+		Blizzard_TokenUI			= {
+			'TokenFrame',						-- Blizzard_TokenUI.xml
+			'TokenFramePopup' },				-- Blizzard_TokenUI.xml
 		Blizzard_TradeSkillUI		= {
-			'TradeSkillFrame' },
-		Blizzard_TrainerUI 			= {
-			'ClassTrainerFrame' },
+			'TradeSkillFrame' },				-- Blizzard_TradeSkillUI.xml
+		Blizzard_TrainerUI			= {
+			'ClassTrainerFrame' },				-- Blizzard_TrainerUI.xml
 		Blizzard_VoidStorageUI		= {
-			'VoidStorageFrame' }, 
-		ConsolePort					= { 
-			'AddonList',
-            'AudioOptionsFrame',
-			'BagHelpBox',
-			'BankFrame',
-			'BasicScriptErrors',
-			'CharacterFrame',
-			'ChatConfigFrame',
-			'ChatMenu',
-			'CinematicFrameCloseDialog',
-			'ContainerFrame1',
+			'VoidStorageFrame' },				-- Blizzard_VoidStorageUI.xml
+		ConsolePort					= {
+			'AudioOptionsFrame',				-- AudioOptionsFrame.xml
+			'BankFrame',						-- BankFrame.xml
+			'BasicScriptErrors',				-- BasicControls.xml
+			'CharacterFrame',					-- CharacterFrame.xml
+			'ChatConfigFrame',					-- ChatConfigFrame.xml
+			'ChatMenu',							-- FloatingChatFrame.xml
+			'CoinPickupFrame',					-- CoinPickupFrame.xml
+			'CompactRaidFrameManager',			-- Blizzard_CompactRaidFrames (LoadOnDemand: 0)
+			'CompactUnitFrameProfiles',			-- Blizzard_CUFProfiles (LoadOnDemand: 0)
+			'ContainerFrame1',					-- ContainerFrame.xml
 			'ContainerFrame2',
 			'ContainerFrame3',
 			'ContainerFrame4',
@@ -673,53 +800,68 @@ function ConsolePort:GetDefaultUIFrames()
 			'ContainerFrame11',
 			'ContainerFrame12',
 			'ContainerFrame13',
-			'DressUpFrame',
-			'DropDownList1',
+			'DressUpFrame',						-- DressUpFrames.xml
+			'DropDownList1',					-- UIDropDownMenu.xml
 			'DropDownList2',
-			'FriendsFrame',	
-			'GameMenuFrame',
-			'GossipFrame',
-			'GuildInviteFrame',
-			'InterfaceOptionsFrame',
-			'ItemRefTooltip',
-			'ItemTextFrame',
-			'LFDRoleCheckPopup',
-			'LFGDungeonReadyDialog',
-			'LFGInvitePopup',
-			'LootFrame',
-			'MailFrame',
-			'MerchantFrame',
-			'OpenMailFrame',
-			'PetBattleFrame',
-			'PetitionFrame',
-			'PVEFrame',
-			'PVPReadyDialog',
-			'QuestFrame','QuestLogPopupDetailFrame',
-			'RecruitAFriendFrame',
-			'ReadyCheckFrame',
-			'SpellBookFrame',
-			'SplashFrame',
-			'StackSplitFrame',
-			'StaticPopup1',
-			'StaticPopup2',
-			'StaticPopup3',
-			'StaticPopup4',
-			'TaxiFrame',
-			'HelpFrame',
-            'HelpMenuFrame',
-			'CoinPickupFrame',
-			'PVPParentFrame',
-			'QuestLogFrame',
-			'LFDQueueFrame',
-			'TimeManagerFrame',
-			'TradeFrame',
-			'TutorialFrame',
-			'VideoOptionsFrame',
-			'WorldMapFrame',
-			'GroupLootFrame1',
+			'FlexRaidFrame',					-- FlexRaidFrame.xml
+			'FriendsFrame',						-- FriendsFrame.xml
+			'GameMenuFrame',					-- GameMenuFrame.xml
+			'GossipFrame',						-- GossipFrame.xml
+			'GroupFinderFrame',					-- PVEFrame.xml
+			'GroupLootFrame1',					-- LootFrame.xml
 			'GroupLootFrame2',
 			'GroupLootFrame3',
 			'GroupLootFrame4',
+			'GuildInviteFrame',					-- GuildInviteFrame.xml
+			'GuildRegistrarFrame',				-- GuildRegistrarFrame.xml
+			'HelpFrame',						-- HelpFrame.xml
+			'InterfaceOptionsFrame',			-- InterfaceOptionsFrame.xml
+			'ItemRefTooltip',					-- ItemRef.xml
+			'ItemTextFrame',					-- ItemTextFrame.xml
+			'LFDParentFrame',					-- LFDFrame.xml
+			'LFDQueueFrame',					-- LFDFrame.xml
+			'LFDRoleCheckPopup',				-- LFDFrame.xml
+			'LFGDungeonReadyDialog',			-- LFGFrame.xml
+			'LFGInvitePopup',					-- LFGFrame.xml
+			'LootFrame',						-- LootFrame.xml
+			'LossOfControlFrame',				-- LossOfControlFrame.xml
+			'MailFrame',						-- MailFrame.xml
+			'MerchantFrame',					-- MerchantFrame.xml
+			'OpenMailFrame',					-- MailFrame.xml
+			'PVEFrame',							-- PVEFrame.xml
+			'PVPReadyDialog',					-- PVPHelper.xml
+			'PetBattleFrame',					-- Blizzard_PetBattleUI (LoadOnDemand: 0)
+			'PetStableFrame',					-- PetStable.xml
+			'PetitionFrame',					-- PetitionFrame.xml
+			'QuestFrame',						-- QuestFrame.xml
+			'QuestLogDetailFrame',				-- QuestLogFrame.xml (was QuestLogPopupDetailFrame)
+			'QuestLogFrame',					-- QuestLogFrame.xml
+			'RaidBrowserFrame',					-- LFRFrame.xml
+			'RaidFinderFrame',					-- RaidFinder.xml
+			'RaidParentFrame',					-- RaidFrame.xml
+			'ReadyCheckFrame',					-- ReadyCheck.xml
+			'RecruitAFriendFrame',				-- RecruitAFriendFrame.xml
+			'ScenarioFinderFrame',				-- ScenarioFinder.xml
+			'SpellBookFrame',					-- SpellBookFrame.xml
+			'StackSplitFrame',					-- StackSplitFrame.xml
+			'StaticPopup1',						-- StaticPopup.xml
+			'StaticPopup2',
+			'StaticPopup3',
+			'StaticPopup4',
+			'TabardFrame',						-- TabardFrame.xml
+			'TaxiFrame',						-- TaxiFrame.xml
+			'TradeFrame',						-- TradeFrame.xml
+			'TutorialFrame',					-- TutorialFrame.xml
+			'VideoOptionsFrame',				-- VideoOptionsFrame.xml
+			-- WatchFrame (MoP's quest tracker) is deliberately NOT registered.
+			-- Everything else in this list is a panel that opens and closes, but
+			-- the tracker is always visible with points set -- and UIStack.lua does
+			--     if widget:IsVisible() and widget:GetPoint() then visible[widget] = true
+			-- so registering it leaves the interface cursor permanently convinced a
+			-- panel is open. It parks on the quest tracker and swallows A / D-pad,
+			-- which is exactly the "cursor stuck on the quest log" symptom.
+			'WorldMapFrame',					-- WorldMapFrame.xml
+			'WorldStateScoreFrame',				-- WorldStateFrame.xml
 		},
 	}
 end

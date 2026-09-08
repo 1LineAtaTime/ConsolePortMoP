@@ -827,7 +827,13 @@ Atlas.GetRoundActionButton = function(name, isCheck, parent, size, templates, no
         cooldown:ClearAllPoints()
         cooldown:SetPoint("CENTER")
         cooldown:SetSize(size, size)
-        cooldown:SetDrawEdge(false)
+        -- Cooldown:SetDrawEdge is Legion+. On 5.4.8 the edge is controlled by
+        -- the XML drawEdge attribute and there is no setter, so calling it here
+        -- errored out of GetRoundActionButton and took Frames/Totem.lua down
+        -- with it at load.
+        if cooldown.SetDrawEdge then
+            cooldown:SetDrawEdge(false)
+        end
     end
 
 	button.Cooldown = cooldown

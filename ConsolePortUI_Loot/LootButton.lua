@@ -22,18 +22,24 @@ function LootButton:OnClick()
 end
 
 function LootButton:OnEnter()
-	local slot = self:GetID() 
-	--if ( slotType == LOOT_SLOT_ITEM ) then
-	if(LootSlotIsCoin(slot) ~= 1) then -- If money, don't show any tooltip  
+	local slot = self:GetID()
+	-- MoP replaced LootSlotIsCoin/LootSlotIsItem with GetLootSlotType plus the
+	-- LOOT_SLOT_* constants, and added a currency slot type with its own tooltip.
+	local slotType = GetLootSlotType and GetLootSlotType(slot)
+	if slotType == nil then
+		-- 3.3.5 fallback
+		slotType = (LootSlotIsCoin and LootSlotIsCoin(slot) == 1) and 2 or 1
+	end
+
+	if ( slotType == (LOOT_SLOT_ITEM or 1) ) then
 		GameTooltip:SetOwner(self, 'ANCHOR_BOTTOMRIGHT', 0, 50)
 		GameTooltip:SetLootItem(slot)
 		CursorUpdate(self)
+	elseif ( LOOT_SLOT_CURRENCY and slotType == LOOT_SLOT_CURRENCY and GameTooltip.SetLootCurrency ) then
+		GameTooltip:SetOwner(self, 'ANCHOR_BOTTOMRIGHT', 0, 52)
+		GameTooltip:SetLootCurrency(slot)
+		CursorUpdate(self)
 	end
-	--if ( slotType == LOOT_SLOT_CURRENCY ) then
-	--	GameTooltip:SetOwner(self, 'ANCHOR_BOTTOMRIGHT', 0, 52)
-	--	GameTooltip:SetLootCurrency(slot)
-	--	CursorUpdate(self)
-	--end
 	if GameTooltip:IsOwned(self) then
 		local backdrop = GameTooltip:GetBackdrop()
 		if backdrop then
@@ -97,5 +103,7 @@ function LootButton:Update()
 	self:SetCount(quantity)
 	self:SetQuality(quality)
 	self:SetText(item)
-	self:SetQuestItem(isQuestItem)
+	-- MoP returns 8 values here (3.3.5 returned 5). questId marks a slot that
+	-- starts a quest, so the border should show for those too.
+	self:SetQuestItem(isQuestItem or (questId and not isActive) or false)
 end

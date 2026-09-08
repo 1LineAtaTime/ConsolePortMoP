@@ -68,7 +68,24 @@ for name, script in pairs({
 				header = self:GetAttribute("ahln"..hID)
 			end
 		end
-		
+
+		if not header then return end
+
+		-- Hide every OTHER header's buttons before showing this one.
+		-- Nothing in the tab-click path ever reached ClearHeader, so clicking a
+		-- tab only ever added a column and they piled up on top of each other.
+		local ahlncnt = self:GetAttribute("ahlncnt") or 0
+		for i = 1, ahlncnt do
+			if i ~= hID then
+				local other = self:GetAttribute("ahln"..i)
+				if other then
+					for _, button in ipairs(newtable(other:GetChildren())) do
+						button:Hide()
+					end
+				end
+			end
+		end
+
 		for _, button in ipairs(newtable(header:GetChildren())) do
 			local condition = button:GetAttribute('condition')
 			if condition then

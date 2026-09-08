@@ -20,10 +20,16 @@
 				<Anchor point="CENTER"/>
 			</Anchors>
 		</ButtonText>
+		<!-- Without explicit state fonts, a Button that goes PUSHED or has its
+		     highlight locked swaps to a nil font object and its label stops
+		     drawing. The selected tab does exactly that. -->
+		<NormalFont style="AchievementPointsFont"/>
+		<HighlightFont style="AchievementPointsFont"/>
+		<DisabledFont style="AchievementPointsFont"/>
 		<Animations>
 			<AnimationGroup parentKey="OnFocusAnim">
-				<Scale childKey="HighlightTexture" duration="0.1" order="1" fromScaleX="0.1" fromScaleY="1" toScaleX="1.05" toScaleY="1"/>
-				<Scale childKey="HighlightTexture" duration="0.1" order="2" fromScaleX="1.05" fromScaleY="1" toScaleX="1" toScaleY="1"/>
+				<Scale targetKey="$parent.$parent.HighlightTexture" duration="0.1" order="1" scaleX="1.05" scaleY="1"/>
+				<Scale targetKey="$parent.$parent.HighlightTexture" duration="0.1" order="2" scaleX="1" scaleY="1"/>
 			</AnimationGroup>
 		</Animations>
 	</Button>
@@ -43,6 +49,11 @@
 				<Anchor point="LEFT" x="60" y="0"/>
 			</Anchors>
 		</ButtonText>
+		<!-- See the note on CPUIListCategoryTemplate: state fonts must exist or
+		     a pushed / locked-highlight button loses its label entirely. -->
+		<NormalFont style="GameFontNormal"/>
+		<HighlightFont style="GameFontHighlight"/>
+		<DisabledFont style="GameFontDisable"/>
 		<Layers>
 			<Layer level="ARTWORK" textureSubLevel="1">
 				<Texture parentKey="Icon" name="$parentIcon">
@@ -91,7 +102,7 @@
 						<Anchor point="BOTTOMRIGHT" relativeTo="$parentIcon"/>
 					</Anchors>
 					<MaskedTextures>
-						<MaskedTexture childKey="Icon"/>
+						<MaskedTexture targetKey="$parent.$parent.Icon"/>
 					</MaskedTextures>
 				</MaskTexture>
 			</Layer>
@@ -111,15 +122,29 @@
 				</Texture>
 			</Layer>
 		</Layers>
-		<Scripts> 
-			<OnShow method="OnShow"/>
-			<OnHide method="OnHide"/>
+		<!-- 5.4.8: method="" on a script handler is a Legion era spelling this client
+		     ignores in silence, so neither handler was ever hooked. Plain script
+		     bodies, guarded because mixin="" above is ignored too and nothing
+		     guarantees the mixin reached a given instance. (The two real instances,
+		     $parentGlowLeft/$parentGlowRight, mix themselves in and define their own
+		     handlers, so this is belt and braces for any future one.)
+		     Deliberately NOT an <OnLoad>: on 5.4.8 a child <OnLoad> REPLACES the one
+		     it inherits, and SecureHandlerBaseTemplate installs Execute/SetFrameRef/
+		     WrapScript from its OnLoad. Adding OnLoad to a template in this suite is
+		     how the secure methods went missing. -->
+		<Scripts>
+			<OnShow>
+				if self.OnShow then self:OnShow() end
+			</OnShow>
+			<OnHide>
+				if self.OnHide then self:OnHide() end
+			</OnHide>
 		</Scripts>
 		<Animations>
 			<AnimationGroup parentKey="OnShowAnim" setToFinalAlpha="true">
-				<Alpha childKey="LineSheen" startDelay="0" duration="0.5" order="1" fromAlpha="0" toAlpha="0.75"/>
-				<Alpha childKey="LineSheen" startDelay="0.5" duration="0.5" order="1" fromAlpha="0.75" toAlpha="0"/>
-				<Translation parentKey="LineSheenTranslation" childKey="LineSheen" startDelay="0.15" duration="1" order="1" offsetX="230" offsetY="0"/>
+				<Alpha targetKey="$parent.$parent.LineSheen" startDelay="0" duration="0.5" order="1" change="0.75"/>
+				<Alpha targetKey="$parent.$parent.LineSheen" startDelay="0.5" duration="0.5" order="1" change="-0.75"/>
+				<Translation parentKey="LineSheenTranslation" targetKey="$parent.$parent.LineSheen" startDelay="0.15" duration="1" order="1" offsetX="230" offsetY="0"/>
 			</AnimationGroup>
 		</Animations>
 	</Frame>
@@ -129,7 +154,7 @@
 		<Layers>
 			<Layer level="ARTWORK">
 				<Texture name="$parentBackground" parentKey="Background" hidden="false" alpha="1" file="Interface\AddOns\ConsolePort\Textures\Castbar\CastBar.blp"> <!-- atlas="Objective-Header" useAtlasSize="true"> -->
-					<Size x="297" y="86	"/>
+					<Size x="297" y="86"/>
 					<Anchors>
 						<Anchor point="TOPLEFT" x="-29" y="14"/>
 					</Anchors>
@@ -182,25 +207,25 @@
 		</Scripts>
 		<Animations>
 			<AnimationGroup parentKey="HeaderOpenAnim" setToFinalAlpha="true">
-				<Alpha childKey="Background" startDelay="0" duration="0" order="1" fromAlpha="0" toAlpha="0"/>
-				<Alpha childKey="Background" startDelay="0.25" duration="0.5" order="1" fromAlpha="0" toAlpha="1"/>
-				<Alpha childKey="LineGlow" duration="0.15" order="1" fromAlpha="0" toAlpha="1"/>
-				<Alpha childKey="LineGlow" startDelay="0.25" duration="0.65" order="1" fromAlpha="1" toAlpha="0"/>
-				<Scale childKey="LineGlow" duration="0.15" order="1" fromScaleX="0.1" fromScaleY="1.5" toScaleX="2" toScaleY="1.5">
+				<Alpha targetKey="$parent.$parent.Background" startDelay="0" duration="0" order="1" change="-1"/>
+				<Alpha targetKey="$parent.$parent.Background" startDelay="0.25" duration="0.5" order="1" change="1"/>
+				<Alpha targetKey="$parent.$parent.LineGlow" duration="0.15" order="1" change="1"/>
+				<Alpha targetKey="$parent.$parent.LineGlow" startDelay="0.25" duration="0.65" order="1" change="-1"/>
+				<Scale targetKey="$parent.$parent.LineGlow" duration="0.15" order="1" scaleX="2" scaleY="1.5">
 					<Origin point="CENTER">
 						<Offset x="-50" y="0"/>
 					</Origin>
 				</Scale>
-				<Translation childKey="LineGlow" duration="0.75" order="1" offsetX="50" offsetY="0"/>
-				<Alpha childKey="SoftGlow" duration="0.25" order="1" fromAlpha="0" toAlpha="1"/>
-				<Alpha childKey="SoftGlow" startDelay="0.25" duration="0.5" order="1" fromAlpha="1" toAlpha="0"/>
-				<Scale childKey="SoftGlow" duration="0.25" order="1" fromScaleX="0.5" fromScaleY="0.5" toScaleX="0.8" toScaleY="0.8"/>
-				<Alpha childKey="StarBurst" duration="0.25" order="1" fromAlpha="0" toAlpha="1"/>
-				<Alpha childKey="StarBurst" startDelay="0.25" duration="0.5" order="1" fromAlpha="1" toAlpha="0"/>
-				<Scale childKey="StarBurst" duration="0.25" order="1" fromScaleX="0.5" fromScaleY="0.5" toScaleX="1" toScaleY="1"/>
-				<Alpha childKey="LineSheen" startDelay="0.15" duration="0.5" order="1" fromAlpha="0" toAlpha="0.75"/>
-				<Alpha childKey="LineSheen" startDelay="0.75" duration="0.5" order="1" fromAlpha="0.75" toAlpha="0"/>
-				<Translation childKey="LineSheen" startDelay="0.15" duration="1.5" order="1" offsetX="250" offsetY="0"/>
+				<Translation targetKey="$parent.$parent.LineGlow" duration="0.75" order="1" offsetX="50" offsetY="0"/>
+				<Alpha targetKey="$parent.$parent.SoftGlow" duration="0.25" order="1" change="1"/>
+				<Alpha targetKey="$parent.$parent.SoftGlow" startDelay="0.25" duration="0.5" order="1" change="-1"/>
+				<Scale targetKey="$parent.$parent.SoftGlow" duration="0.25" order="1" scaleX="0.8" scaleY="0.8"/>
+				<Alpha targetKey="$parent.$parent.StarBurst" duration="0.25" order="1" change="1"/>
+				<Alpha targetKey="$parent.$parent.StarBurst" startDelay="0.25" duration="0.5" order="1" change="-1"/>
+				<Scale targetKey="$parent.$parent.StarBurst" duration="0.25" order="1" scaleX="1" scaleY="1"/>
+				<Alpha targetKey="$parent.$parent.LineSheen" startDelay="0.15" duration="0.5" order="1" change="0.75"/>
+				<Alpha targetKey="$parent.$parent.LineSheen" startDelay="0.75" duration="0.5" order="1" change="-0.75"/>
+				<Translation targetKey="$parent.$parent.LineSheen" startDelay="0.15" duration="1.5" order="1" offsetX="250" offsetY="0"/>
 			</AnimationGroup>
 		</Animations>
 	</Frame>

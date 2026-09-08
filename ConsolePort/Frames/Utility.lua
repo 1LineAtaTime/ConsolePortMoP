@@ -360,10 +360,21 @@ function ConsolePortRingButtonMixin:PostClick(button)
 		local newValue
 		-- Convert spellID to name
 		if cursorType == "spell" then
-			local spellName, subSpellName = GetSpellName(id, SpellBookFrame.bookType); 
-			local link = GetSpellLink(spellName, subSpellName);  
-			newValue = select(3, strfind(link, "spell:(%d+)")) 
-		elseif cursorType == "companion" then 
+			-- MoP: GetSpellName is gone. GetCursorInfo already hands back the
+			-- spell id as its 4th return, so prefer that over re-deriving it --
+			-- SpellBookFrame.bookType is the currently selected tab and is stale
+			-- once the spellbook has been closed or switched.
+			if spellID then
+				newValue = spellID
+			elseif GetSpellBookItemInfo then
+				local slotType, slotID = GetSpellBookItemInfo(id, companionType or SpellBookFrame.bookType)
+				newValue = (slotType == 'SPELL') and slotID or nil
+			else
+				local spellName, subSpellName = CPAPI:GetSpellBookItemName(id, SpellBookFrame.bookType)
+				local link = spellName and GetSpellLink(spellName, subSpellName)
+				newValue = link and select(3, strfind(link, "spell:(%d+)"))
+			end
+		elseif cursorType == "companion" then
 			local _, _, petSpellID = GetCompanionInfo(companionType, id)  
 			newValue = GetSpellInfo(petSpellID)
 			self:SetAttribute("mountID", petSpellID)

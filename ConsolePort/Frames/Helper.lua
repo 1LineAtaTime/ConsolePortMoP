@@ -62,13 +62,26 @@ function Helper:OnShow()
 		elseif ( _type == 'equipmentset' ) then
 			name = (data or '') .. loc.EQSET
 			pcallOK, texture = pcall(GetEquipmentSetInfoByName, data)
+		elseif ( _type == 'companion' ) then
+			-- MoP: mounts and non-combat pets ride the cursor as
+			-- 'companion', subType 'MOUNT'/'CRITTER', data = journal index.
+			pcallOK, _, name, _, texture = pcall(GetCompanionInfo, subType or 'MOUNT', data)
 		elseif ( _type == 'mount' ) then
-			pcallOK, name, _, texture = pcall(C_MountJournal.GetMountInfoByID, data)
+			-- WoD+ only; C_MountJournal does not exist on MoP or WotLK, and the
+			-- index was happening outside the pcall, so a nil namespace escaped it.
+			if C_MountJournal and C_MountJournal.GetMountInfoByID then
+				pcallOK, name, _, texture = pcall(C_MountJournal.GetMountInfoByID, data)
+			end
 		elseif ( _type == 'battlepet' ) then
-			local _, _, customName, _, _, _, _, _, petName, petIcon = pcall(C_PetJournal.GetPetInfoByPetID, data) 
-			name = customName or petName
-			name = (name or '') .. loc.BATTLEPET
-			texture = petIcon
+			if C_PetJournal and C_PetJournal.GetPetInfoByPetID then
+				-- The first capture was a fresh local, so the outer pcallOK stayed
+				-- nil and the helper always hid itself on a battlepet cursor.
+				local customName, petName, petIcon
+				pcallOK, _, customName, _, _, _, _, _, petName, petIcon = pcall(C_PetJournal.GetPetInfoByPetID, data)
+				name = customName or petName
+				name = (name or '') .. loc.BATTLEPET
+				texture = petIcon
+			end
 		elseif ( _type == 'flyout' ) then
 			pcallOK, name = pcall(GetFlyoutInfo, data)
 			texture = subType
@@ -187,7 +200,21 @@ function Helper:OnKeyDown(key)
 		local binding = set and set[modifier]    
 		local actionID = ConsolePort:GetActionID(binding) 
 
-		if(BonusActionBarFrame:IsVisible()) then -- a shapeshift bar/stance bar/vehicle bar is open so... yeah...
+		-- Is a bonus/stance/vehicle/override bar currently paged in?
+		-- 3.3.5 answered this by looking at BonusActionBarFrame, which does not
+		-- exist past WotLK (it indexed nil here). MoP has proper state queries.
+		-- Deliberately only the bonus-bar offset: GetBonusActionID searches slots
+		-- 73-84 (page 7), which is what a bonus bar means. Vehicle, override and
+		-- temp-shapeshift bars live at 133+ and are handled by GetOffsetActionID,
+		-- so folding them in here would place actions onto the wrong page.
+		local onBonusBar
+		if BonusActionBarFrame then
+			onBonusBar = BonusActionBarFrame:IsVisible()
+		else
+			onBonusBar = (GetBonusBarOffset and GetBonusBarOffset() > 0) or false
+		end
+
+		if onBonusBar then
 			actionID = ConsolePort:GetBonusActionID(binding)
 		end
 		
@@ -230,9 +257,11 @@ function Helper:OnKeyDown(key)
 				end
 			end
 		end
-		--self:SetPropagateKeyboardInput(false) 
+		-- Restored for 5.4.8: this frame does EnableKeyboard(true), so without
+		-- the matching propagate calls it swallows Escape until a /reload.
+		if self.SetPropagateKeyboardInput then self:SetPropagateKeyboardInput(false) end
 	else
-		--self:SetPropagateKeyboardInput(true)
+		if self.SetPropagateKeyboardInput then self:SetPropagateKeyboardInput(true) end
 	end
 	self:UpdateWidth()
 end
@@ -281,7 +310,7 @@ for _, event in pairs({
 	-------------------------
 }) do Helper:RegisterEvent(event) end
 
---Helper:SetPropagateKeyboardInput(true) 
+if Helper.SetPropagateKeyboardInput then Helper:SetPropagateKeyboardInput(true) end
 Helper:SetScript('OnShow', Helper.OnShow)
 Helper:SetScript('OnHide', Helper.OnHide)
 Helper:SetScript('OnEvent', Helper.OnEvent)

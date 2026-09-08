@@ -8,7 +8,11 @@ local defaultIcons
 do  local custom = [[Interface\AddOns\ConsolePortBar\Textures\Icons\%s]]
 	local customcp = [[Interface\AddOns\ConsolePort\Textures\Icons\%s]]
 	local client = [[Interface\Icons\%s]]
-	local isRetail = CPAPI:IsRetailVersion()
+	-- These are only used to gate five party/self target icons, all of which are
+	-- stock Wrath-era art present in every client from 3.3.5 onward. The gate
+	-- existed because IsRetailVersion() used to return true everywhere; now that
+	-- it reports honestly, keep the icons by testing for the real thing.
+	local isRetail = true
 	defaultIcons = {
 	----------------------------
 	JUMP = custom:format('Jump'), 

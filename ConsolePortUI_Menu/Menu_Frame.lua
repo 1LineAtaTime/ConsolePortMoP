@@ -149,10 +149,16 @@ local Menu =  UI:CreateFrame('Frame', an, IsCustomClient and EscapeMenu or GameM
 						self:RegisterEvent('UPDATE_BINDINGS')
 						self:RegisterEvent('PLAYER_TALENT_UPDATE')
 						self:RegisterEvent('PLAYER_SPECIALIZATION_CHANGED')
-						self:RegisterEvent('HONOR_LEVEL_UPDATE')
-						self:RegisterEvent('HONOR_PRESTIGE_UPDATE')
-						self:RegisterEvent('PLAYER_PVP_TALENT_UPDATE')
-						self:RegisterEvent('PLAYER_CHARACTER_UPGRADE_TALENT_COUNT_CHANGED') 
+						-- The four below are Legion-era and do not exist on MoP.
+						-- Registering an unknown event raises, so use the same
+						-- pcall guard the core uses in Core/Events.lua.
+						for _, event in pairs({
+							'HONOR_LEVEL_UPDATE',
+							'HONOR_PRESTIGE_UPDATE',
+							'PLAYER_PVP_TALENT_UPDATE',
+							'PLAYER_CHARACTER_UPGRADE_TALENT_COUNT_CHANGED' }) do
+							pcall(self.RegisterEvent, self, event)
+						end
 					end,
 					OnEvent = function(self, event, ...)
 						self.tooltipText = nil
@@ -242,8 +248,23 @@ local Menu =  UI:CreateFrame('Frame', an, IsCustomClient and EscapeMenu or GameM
 
 						SetPortraitToTexture(self.Icon, mountIcon)
 					end, 
-					RefTo   = _G["CollectionsMicroButton"],
-					OnClick = (not _G["CollectionsMicroButton"]) and function(self) ToggleCharacter('PetPaperDollFrame') end or nil,
+					-- MoP has no CollectionsMicroButton (that is Legion), and the
+					-- old fallback opened PetPaperDollFrame -- the hunter/warlock
+					-- pet STATS tab, not the mount collection. The 5.4.8 mount and
+					-- pet collection is PetJournalParent from Blizzard_PetJournal,
+					-- which is load-on-demand, with tab 1 = Mounts, tab 2 = Pets.
+					RefTo   = _G["CollectionsMicroButton"] or _G["CompanionsMicroButton"],
+					OnClick = (not _G["CollectionsMicroButton"] and not _G["CompanionsMicroButton"]) and function(self)
+						if not IsAddOnLoaded('Blizzard_PetJournal') then
+							UIParentLoadAddOn('Blizzard_PetJournal')
+						end
+						if PetJournalParent then
+							ToggleFrame(PetJournalParent)
+							if PetJournalParent:IsShown() and PetJournalParent_SetTab then
+								PetJournalParent_SetTab(PetJournalParent, 1) -- Mounts
+							end
+						end
+					end or nil,
 				},
 			},
 		},
@@ -328,9 +349,13 @@ local Menu =  UI:CreateFrame('Frame', an, IsCustomClient and EscapeMenu or GameM
 					Desc	= BUG_CATEGORY14,
 					Img 	= [[Interface\ICONS\Ability_Parry]],
 					OnClick = function(self)
+						-- MoP: TogglePVPFrame is gone; the PvP interface opens
+						-- through TogglePVPUI (PVEFrame -> Blizzard_PVPUI).
 						if TogglePVPUIFrame then
 							TogglePVPUIFrame()
-						else
+						elseif TogglePVPUI then
+							TogglePVPUI()
+						elseif TogglePVPFrame then
 							TogglePVPFrame()
 						end
 					end,
@@ -554,6 +579,13 @@ local Menu =  UI:CreateFrame('Frame', an, IsCustomClient and EscapeMenu or GameM
 					Point 	= {'TOP', 'parent.Return', 'BOTTOM', 0, 0},
 					Desc	= LOGOUT,
 					RefTo 	= IsCustomClient and EscapeMenuButton3 or GameMenuButtonLogout,
+					-- Both Logout and Exit raise a StaticPopup with a countdown
+					-- and a confirm button. StaticPopup sits at DIALOG strata
+					-- while this menu is FULLSCREEN, so without hiding the menu
+					-- the popup is drawn underneath it -- the client looks like
+					-- it has hung when it is really waiting on a click you
+					-- cannot see or reach.
+					Attrib 	= {hidemenu = true},
 					Img 	= ICON:format('Ability_Paladin_BeaconOfLight'),
 				--	OnLoadHook = function(self) SetPortraitToTexture(self.Icon, ICON:format('Ability_Paladin_BeaconOfLight')) end,
 				},
@@ -565,6 +597,9 @@ local Menu =  UI:CreateFrame('Frame', an, IsCustomClient and EscapeMenu or GameM
 					Point 	= {'TOP', 'parent.Logout', 'BOTTOM', 0, 0},
 					Desc	= EXIT_GAME,
 					RefTo 	= IsCustomClient and EscapeMenuButton2 or GameMenuButtonQuit,
+					-- see the note on Logout: the QUIT countdown popup is buried
+					-- under this menu unless the menu hides on click
+					Attrib 	= {hidemenu = true},
 					Img 	= [[Interface\RAIDFRAME\ReadyCheck-NotReady]],
 				},
 				Controller  = {
@@ -593,6 +628,12 @@ local Menu =  UI:CreateFrame('Frame', an, IsCustomClient and EscapeMenu or GameM
 					Point 	= {'TOP', 'parent.Controller', 'BOTTOM', 0, 0},
 					Desc	= VIDEOOPTIONS_MENU, 
 					RefTo 	= IsCustomClient and EscapeMenuButton4 or GameMenuButtonOptions,
+					-- 5.4.8: every other entry that opens a Blizzard panel carries
+					-- hidemenu. Without it the ConsolePort menu stays shown behind the
+					-- options frame, and its secure environment keeps the override
+					-- bindings it installs while open -- so every bound key (M, C, bags,
+					-- and the menu toggle itself) is swallowed until a /reload.
+					Attrib 	= {hidemenu = true},
 					Img 	= [[Interface\Icons\Ability_TownWatch]], 
 					OnLoadHook = function(self) SetPortraitToTexture(self.Icon, ICON:format('Ability_TownWatch')) end,
 				},
@@ -602,8 +643,50 @@ local Menu =  UI:CreateFrame('Frame', an, IsCustomClient and EscapeMenu or GameM
 					Mixin 	= Button,
 					ID 		= 6,
 					Point 	= {'TOP', 'parent.Video', 'BOTTOM', 0, 0},
-					Desc	= VOICE_SOUND, 
-					RefTo 	= IsCustomClient and EscapeMenuButton5 or (GameMenuButtonAudioOptions and GameMenuButtonAudioOptions or GameMenuButtonSoundOptions),
+					Desc	= VOICE_SOUND,
+					-- MoP has neither GameMenuButtonAudioOptions nor
+					-- GameMenuButtonSoundOptions -- audio moved inside the
+					-- system options panel -- so open AudioOptionsFrame directly.
+					RefTo 	= IsCustomClient and EscapeMenuButton5 or GameMenuButtonAudioOptions or GameMenuButtonSoundOptions,
+					-- TAINT. This entry used to call ShowUIPanel(AudioOptionsFrame) and
+					-- HideUIPanel(GameMenuFrame) from here. Both dispatch through the
+					-- SECURE FramePositionDelegate (UIParent.lua:2283), so calling
+					-- them from addon Lua taints the panel manager -- and after that
+					-- every panel-opening binding silently stops working: M, C, bags,
+					-- and the game menu itself, with no error and the bindings still
+					-- perfectly intact. Escape keeps cancelling casts because that is
+					-- not a panel action. That is exactly the reported symptom.
+					--
+					-- It is also why ONLY this entry did it. Video and Interface set
+					-- RefTo, so DrawIndex turns them into a secure '/click
+					-- GameMenuButtonOptions' macro, and Blizzard's own OnClick calls
+					-- ShowUIPanel from untainted code. MoP has no
+					-- GameMenuButtonAudioOptions, so Audio was the one entry left
+					-- running insecure Lua.
+					--
+					-- :Show() does not go near the panel manager. The menu closes via
+					-- the hidemenu macro below, which is secure.
+					OnClick = (not IsCustomClient
+						and not GameMenuButtonAudioOptions
+						and not GameMenuButtonSoundOptions
+						and AudioOptionsFrame) and function(self)
+							-- OptionsFrame_OnShow clicks categoryFrame.buttons[1] and
+							-- indexes its .element unguarded, so showing this frame
+							-- before its category list is populated raises
+							-- "attempt to index local 'panel'".
+							local audio = AudioOptionsFrame
+							if audio and audio.categoryList and #audio.categoryList > 0 then
+								audio:Show()
+							elseif VideoOptionsFrame then
+								VideoOptionsFrame:Show()
+							end
+						end or nil,
+					-- 5.4.8: every other entry that opens a Blizzard panel carries
+					-- hidemenu. Without it the ConsolePort menu stays shown behind the
+					-- options frame, and its secure environment keeps the override
+					-- bindings it installs while open -- so every bound key (M, C, bags,
+					-- and the menu toggle itself) is swallowed until a /reload.
+					Attrib 	= {hidemenu = true},
 					Img 	= [[Interface\FriendsFrame\PlusManz-BattleNet]],
 				},
 				Interface  = {
@@ -614,6 +697,12 @@ local Menu =  UI:CreateFrame('Frame', an, IsCustomClient and EscapeMenu or GameM
 					Point 	= {'TOP', 'parent.Audio', 'BOTTOM', 0, 0},
 					Desc	= UIOPTIONS_MENU, 
 					RefTo 	= IsCustomClient and EscapeMenuButton8 or GameMenuButtonUIOptions,
+					-- 5.4.8: every other entry that opens a Blizzard panel carries
+					-- hidemenu. Without it the ConsolePort menu stays shown behind the
+					-- options frame, and its secure environment keeps the override
+					-- bindings it installs while open -- so every bound key (M, C, bags,
+					-- and the menu toggle itself) is swallowed until a /reload.
+					Attrib 	= {hidemenu = true},
 					Img 	= [[Interface\TUTORIALFRAME\UI-TutorialFrame-GloveCursor]],
 				},
 				AddOns  = {
@@ -625,13 +714,35 @@ local Menu =  UI:CreateFrame('Frame', an, IsCustomClient and EscapeMenu or GameM
 					Desc	= ADDONS, 
                     Attrib 	= {hidemenu = true},
 					OnClick = function(self)
-						if (not IsCustomClient) then 
-							InterfaceOptionsFrame:Show()
-							PanelTemplates_SetTab(InterfaceOptionsFrame, 2);       
-							InterfaceOptionsFrameAddOns:Show();
-							InterfaceOptionsFrameCategories:Hide();
-						else
+						if IsCustomClient then
 							ShowAddonsPanel()
+							return
+						end
+						-- 5.4.8: PanelTemplates_SetTab only repaints the tab. The work
+						-- of swapping the lists lives in InterfaceOptionsFrame_TabOnClick,
+						-- which the tab's own OnClick calls -- so setting the tab and
+						-- then hand-toggling the two list frames left the RIGHT-HAND
+						-- pane showing whatever Blizzard category was last selected
+						-- (hence the Interface > Controls panel instead of AddOns).
+						-- Blizzard's own InterfaceOptionsFrame_OpenToCategory does
+						-- exactly what is below: click the tab, then click a row.
+						if InterfaceOptionsFrame_Show then
+							InterfaceOptionsFrame_Show()
+						elseif InterfaceOptionsFrame then
+							InterfaceOptionsFrame:Show()
+						end
+						-- Tab2 only exists once at least one addon has registered a
+						-- panel; with none there is no AddOns list to show at all.
+						local tab = _G.InterfaceOptionsFrameTab2
+						if tab and tab:IsShown() then
+							tab:Click()
+							-- Select the first addon so the pane is not left blank or
+							-- stale on whatever was open before.
+							local list = _G.InterfaceOptionsFrameAddOns
+							local button = list and list.buttons and list.buttons[1]
+							if button and button.element and InterfaceOptionsListButton_OnClick then
+								InterfaceOptionsListButton_OnClick(button)
+							end
 						end
 					end,
 					Img 	= ICON:format('inv_misc_wrench_01'),
@@ -645,6 +756,12 @@ local Menu =  UI:CreateFrame('Frame', an, IsCustomClient and EscapeMenu or GameM
 					Point 	= {'TOP', 'parent.AddOns', 'BOTTOM', 0, -16},
 					Desc	= MACROS, 
 					RefTo 	= IsCustomClient and EscapeMenuButton11 or GameMenuButtonMacros,
+					-- 5.4.8: every other entry that opens a Blizzard panel carries
+					-- hidemenu. Without it the ConsolePort menu stays shown behind the
+					-- options frame, and its secure environment keeps the override
+					-- bindings it installs while open -- so every bound key (M, C, bags,
+					-- and the menu toggle itself) is swallowed until a /reload.
+					Attrib 	= {hidemenu = true},
 					Img 	= ICON:format('trade_engineering'),
 					LoadScript = function(self) SetPortraitToTexture(self.Icon, ICON:format('trade_engineering')) end,
 				},
@@ -656,6 +773,12 @@ local Menu =  UI:CreateFrame('Frame', an, IsCustomClient and EscapeMenu or GameM
 					Point 	= {'TOP', 'parent.Macros', 'BOTTOM', 0, 0},
 					Desc	= KEY_BINDINGS, 
 					RefTo 	= IsCustomClient and EscapeMenuButton9 or GameMenuButtonKeybindings,
+					-- 5.4.8: every other entry that opens a Blizzard panel carries
+					-- hidemenu. Without it the ConsolePort menu stays shown behind the
+					-- options frame, and its secure environment keeps the override
+					-- bindings it installs while open -- so every bound key (M, C, bags,
+					-- and the menu toggle itself) is swallowed until a /reload.
+					Attrib 	= {hidemenu = true},
 					Img 	= [[Interface\MacroFrame\MacroFrame-Icon]],
 				},
 				Help  = {
@@ -863,6 +986,36 @@ do
 	Menu:StartEnvironment()
 	Menu:Execute('hID, bID = 4, 1')
 	Menu:DrawIndex(function(header)
+		-- Same treatment as the buttons: this client will not render the
+		-- XML-declared <ButtonText> on the SELECTED header, so build the caption
+		-- in Lua where no XML parsing is involved. See the long note in
+		-- Menu_Button.lua for the evidence.
+		if header.CreateFontString and not header.CPCaption then
+			local caption = header:CreateFontString(nil, 'OVERLAY')
+			caption:SetFontObject(AchievementPointsFont or GameFontNormal)
+			if not caption:GetFont() then
+				caption:SetFont([[Fonts\FRIZQT__.TTF]], 16)
+			end
+			caption:SetPoint('CENTER', header, 'CENTER', 0, 0)
+			caption:SetJustifyH('CENTER')
+			caption:SetText(header:GetText() or '')
+			caption:Show()
+			header.CPCaption = caption
+			local old = header.GetFontString and header:GetFontString()
+			if old then old:Hide() end
+			if header.SetFontString then header:SetFontString(caption) end
+		end
+
+		-- CPUIListCategoryTemplate's OnFocusAnim uses childKey / fromScaleX /
+		-- toScaleX, none of which exist in 5.4.8's schema. With them dropped the
+		-- Scale targets the header itself and defaults to zero, so playing it on
+		-- selection is at best meaningless and at worst destructive. The mixin
+		-- only plays it `if header.OnFocusAnim`, so clearing it disables it.
+		if header.OnFocusAnim then
+			pcall(function() header.OnFocusAnim:Stop() end)
+			header.OnFocusAnim = nil
+		end
+
 		for i, button in ipairs({header:GetChildren()}) do
 
 			

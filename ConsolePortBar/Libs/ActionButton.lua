@@ -116,10 +116,16 @@ local type_meta_map = {
 local ButtonRegistry, ActiveButtons, ActionButtons, NonActionButtons = lib.buttonRegistry, lib.activeButtons, lib.actionButtons, lib.nonActionButtons
 
 local Update, UpdateButtonState, UpdateUsable, UpdateCount, UpdateCooldown, UpdateTooltip, UpdateNewAction, UpdatePage
-local StartFlash, StopFlash, UpdateFlash, UpdateRangeTimer 
-local ShowGrid, HideGrid, UpdateGrid, SetupSecureSnippets, WrapOnClick 
+local StartFlash, StopFlash, UpdateFlash, UpdateRangeTimer
+local ShowGrid, HideGrid, UpdateGrid, SetupSecureSnippets, WrapOnClick
+-- Restored for 5.4.8. The 3.3.5 backport dropped spell flyouts and the spell
+-- activation ("proc") glow entirely, because WotLK had neither the flyout action
+-- type nor IsSpellOverlayed. MoP has both.
+local ShowOverlayGlow, HideOverlayGlow, UpdateOverlayGlow, UpdateFlyout
 
 local InitializeEventHandler, OnEvent, ForAllButtons, OnUpdate
+-- 5.4.8 additions; see the comment block directly above OnEvent.
+local Reconcile, RefreshAll
 
 local DefaultConfig = {
 	outOfRangeColoring = "button",
@@ -387,30 +393,56 @@ function SetupSecureSnippets(button)
 		return control:RunFor(self, self:GetAttribute("PickupButton"), buttonType, buttonAction)
 	]])
 
+	-- ---------------------------------------------------------------
+	-- 5.4.8 CLIENT BUG: `control` is nil inside a wrapped DRAG script.
+	-- ---------------------------------------------------------------
+	-- FrameXML/SecureHandlers.lua's Wrapped_Drag builds `controlHandle` and then
+	-- passes the undefined global `control` to CallRestrictedClosure:
+	--
+	--     local controlHandle = GetFrameHandle(header, true, true);   -- built...
+	--     CallRestrictedClosure("self,button,kind,value,...",
+	--                           environment,
+	--                           control, preBody, ...)                -- ...and not used
+	--
+	-- Every other wrapper (Wrapped_ShowHide, Wrapped_MouseWheel, the click path)
+	-- passes controlHandle correctly; only the drag path has the typo. The file is
+	-- local so no hook can reach it. Result: any drag wrapper body that mentions
+	-- `control` raises "attempt to index global 'control' (a nil value)" from
+	-- RestrictedExecution.lua:397 -- which is what happened when dragging a spell
+	-- onto some of the bar buttons.
+	--
+	-- Fix: do not use `control` here. HANDLE:RunAttribute (RestrictedFrames.lua:647)
+	-- does the same job from the frame's own handle and supplies a valid control
+	-- itself, so these bodies never touch the broken variable.
+	--
+	-- (History: ConsolePortLK originally had all four of these bodies commented
+	-- out with a note that dragging off a button was broken; commit 89861e4
+	-- "fixed actionbar dragndrop" re-enabled them with control:RunFor, which is
+	-- what re-introduced the crash on this client.)
 	button:SetScript("OnDragStart", nil)
 	-- Wrapped OnDragStart(self, button, kind, value, ...)
-	button.header:WrapScript(button, "OnDragStart", [[ 
-		return control:RunFor(self, self:GetAttribute("OnDragStart"))
+	button.header:WrapScript(button, "OnDragStart", [[
+		return self:RunAttribute("OnDragStart")
 	]])
 	-- Wrap twice, because the post-script is not run when the pre-script causes a pickup (doh)
 	-- we also need some phony message, or it won't work =/
 	button.header:WrapScript(button, "OnDragStart", [[
 		return "message", "update";
-	]], [[ 
-		control:RunFor(self, self:GetAttribute("UpdateState"), self:GetAttribute("state"))
+	]], [[
+		self:RunAttribute("UpdateState", self:GetAttribute("state"))
 	]])
 
 	button:SetScript("OnReceiveDrag", nil)
 	-- Wrapped OnReceiveDrag(self, button, kind, value, ...)
 	button.header:WrapScript(button, "OnReceiveDrag", [[
-		control:RunFor(self, self:GetAttribute("OnReceiveDrag"), kind, value, ...)
+		self:RunAttribute("OnReceiveDrag", kind, value, ...)
 	]])
 	-- Wrap twice, because the post-script is not run when the pre-script causes a pickup (doh)
 	-- we also need some phony message, or it won't work =/
 	button.header:WrapScript(button, "OnReceiveDrag", [[
 		return "message", "update"
 	]], [[
-	    control:RunFor(self, self:GetAttribute("UpdateState"), self:GetAttribute("state"))
+		self:RunAttribute("UpdateState", self:GetAttribute("state"))
 	]])
 
 	button:SetScript("OnAttributeChanged", function(self, ...)
@@ -763,8 +795,104 @@ function InitializeEventHandler()
 	lib.eventFrame:RegisterEvent("SPELL_UPDATE_USABLE")
 	lib.eventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 
+	-- Restored for 5.4.8. None of these five exist on 3.3.5, which is why the
+	-- backport dropped them; all five are live on this client (verified against
+	-- FrameXML/ActionButton.lua 5.4.8b, which registers the same set).
+	-- pcall so that a server build missing one of them cannot take the whole
+	-- event handler down with it.
+	for _, event in ipairs({
+		"SPELL_ACTIVATION_OVERLAY_GLOW_SHOW",   -- proc glow on
+		"SPELL_ACTIVATION_OVERLAY_GLOW_HIDE",   -- proc glow off
+		"SPELL_UPDATE_CHARGES",                 -- charge counter (MoP 5.0)
+		"UPDATE_SUMMONPETS_ACTION",             -- summon-pet icon swap
+		"LOSS_OF_CONTROL_ADDED",                -- LoC cooldown swipe (MoP 5.4)
+		"LOSS_OF_CONTROL_UPDATE",
+	}) do pcall(lib.eventFrame.RegisterEvent, lib.eventFrame, event) end
+
+	-- ---------------------------------------------------------------
+	-- 5.4.8: the bar-swap announcements 3.3.5 did not have.
+	-- ---------------------------------------------------------------
+	-- On 3.3.5 there was exactly one event for "the contents of the bar you
+	-- are looking at have been replaced": UPDATE_BONUS_ACTIONBAR. Vehicles
+	-- went through the bonus bar too, so that single event covered stances,
+	-- possession and vehicles alike -- which is why the backport never needed
+	-- anything else, and why the WotLK build redraws correctly the moment you
+	-- climb into a demolisher.
+	--
+	-- Cataclysm split that apart and MoP inherited the split. Vehicles now
+	-- announce themselves with UPDATE_VEHICLE_ACTIONBAR, quest/scenario
+	-- override bars with UPDATE_OVERRIDE_ACTIONBAR, mind control with
+	-- UPDATE_POSSESS_BAR, and the zone/boss button with UPDATE_EXTRA_ACTIONBAR.
+	-- None of them touches the bonus bar. Blizzard's own 5.4.8
+	-- ActionBarController registers all four (ActionBarController.lua:13-34);
+	-- this library registered none of them, so the secure state driver moved
+	-- the page correctly and then nothing ever repainted the icons.
+	--
+	-- ACTIONBAR_PAGE_CHANGED and UPDATE_BONUS_ACTIONBAR are deliberately in the
+	-- list even though the header handles the paging itself: what is wanted
+	-- here is only the redraw, and a redraw is harmless when the page did not
+	-- actually move (UpdateAction no-ops when nothing changed).
+	for _, event in ipairs({
+		"UPDATE_VEHICLE_ACTIONBAR",
+		"UPDATE_OVERRIDE_ACTIONBAR",
+		"UPDATE_POSSESS_BAR",
+		"UPDATE_EXTRA_ACTIONBAR",
+		"UPDATE_BONUS_ACTIONBAR",
+		"ACTIONBAR_PAGE_CHANGED",
+		"PLAYER_TALENT_UPDATE",
+		"ACTIVE_TALENT_GROUP_CHANGED",
+	}) do pcall(lib.eventFrame.RegisterEvent, lib.eventFrame, event) end
+
 	lib.eventFrame:Show()
 	lib.eventFrame:SetScript("OnUpdate", OnUpdate)
+end
+
+-----------------------------------------------------------
+-- 5.4.8: keeping the bar in step with the client's data
+-----------------------------------------------------------
+-- Almost every refresh below iterates ActiveButtons or ActionButtons, and a
+-- button only enters those tables when Update() has seen HasAction() return
+-- true. A button whose Update() ran before the server had sent the action-bar
+-- contents therefore falls out of both tables and is never looked at again: it
+-- keeps the empty icon, stays desaturated (Update sets SetDesaturated when
+-- GetTexture is nil), never gets a cooldown swipe, and never gets recoloured by
+-- ACTIONBAR_UPDATE_USABLE. That is exactly the "everything is grey when I log
+-- in and sorts itself out once I have played for a bit" symptom -- the things
+-- that fix it (dropping a spell on the button, changing stance, zoning) are
+-- precisely the ones that force a full Update.
+--
+-- Reconcile walks the whole registry and does a real Update on any button whose
+-- HasAction() no longer agrees with its registry membership. One HasAction call
+-- per button, no secure calls, safe in combat. Item/macro/custom buttons report
+-- HasAction() == true unconditionally, so they are never touched by it.
+function Reconcile()
+	for button in next, ButtonRegistry do
+		local hasAction = button:HasAction() and true or false
+		if hasAction ~= (ActiveButtons[button] and true or false) then
+			Update(button)
+		end
+	end
+end
+
+-- A full redraw, plus a second one a moment later. The delayed pass is there
+-- because the events that announce a bar swap are not ordered against the
+-- secure state driver that moves the action page -- whichever of the two runs
+-- second is the one that produces the correct picture, so paint once now and
+-- once after the dust has settled.
+--
+-- atLogin additionally schedules a few late reconciles. On this client the
+-- action-bar contents can land after PLAYER_ENTERING_WORLD and nothing
+-- announces their arrival, so the only reliable answer is to look again.
+function RefreshAll(atLogin)
+	ForAllButtons(Update)
+	if CPAPI and CPAPI.TimerAfter then
+		CPAPI.TimerAfter(0.1, function() ForAllButtons(Update) end)
+		if atLogin then
+			for _, delay in ipairs({1, 3, 6}) do
+				CPAPI.TimerAfter(delay, Reconcile)
+			end
+		end
+	end
 end
 
 function OnEvent(frame, event, arg1, ...)
@@ -780,18 +908,35 @@ function OnEvent(frame, event, arg1, ...)
 			end
 		end
 	elseif event == "PLAYER_ENTERING_WORLD" or event == "UPDATE_SHAPESHIFT_FORM" then
-		ForAllButtons(Update) 
+		RefreshAll(event == "PLAYER_ENTERING_WORLD")
+	-- 5.4.8: the bar has been swapped underneath us (vehicle, override bar,
+	-- possession, extra action button, page change, talent change). See the
+	-- registration block in InitializeEventHandler for why none of these were
+	-- here before -- 3.3.5 folded the lot into UPDATE_BONUS_ACTIONBAR.
+	elseif event == "UPDATE_VEHICLE_ACTIONBAR"
+		or event == "UPDATE_OVERRIDE_ACTIONBAR"
+		or event == "UPDATE_POSSESS_BAR"
+		or event == "UPDATE_EXTRA_ACTIONBAR"
+		or event == "UPDATE_BONUS_ACTIONBAR"
+		or event == "ACTIONBAR_PAGE_CHANGED"
+		or event == "PLAYER_TALENT_UPDATE"
+		or event == "ACTIVE_TALENT_GROUP_CHANGED"
+		or ((event == "UNIT_ENTERED_VEHICLE" or event == "UNIT_EXITED_VEHICLE") and arg1 == "player") then
+		RefreshAll()
 	elseif event == "ACTIONBAR_SHOWGRID" then
 		ShowGrid()
 	elseif event == "ACTIONBAR_HIDEGRID" then
 		HideGrid() 
 	elseif event == "PLAYER_TARGET_CHANGED" then
 		UpdateRangeTimer()
+	-- UNIT_ENTERED_VEHICLE / UNIT_EXITED_VEHICLE for the player are handled by
+	-- the bar-swap branch above now; a full Update covers the button state too.
 	elseif (event == "ACTIONBAR_UPDATE_STATE") or
-		((event == "UNIT_ENTERED_VEHICLE" or event == "UNIT_EXITED_VEHICLE") and (arg1 == "player")) or
 		((event == "COMPANION_UPDATE") and (arg1 == "MOUNT")) then
+		Reconcile()
 		ForAllButtons(UpdateButtonState, true)
 	elseif event == "ACTIONBAR_UPDATE_USABLE" then
+		Reconcile()
 		for button in next, ActionButtons do
 			UpdateUsable(button)
 		end
@@ -845,6 +990,65 @@ function OnEvent(frame, event, arg1, ...)
 		for button in next, ActiveButtons do
 			if button._state_type == "item" then
 				Update(button)
+			end
+		end
+	-----------------------------------------------------------------
+	-- Restored for 5.4.8 (everything below this line).
+	-----------------------------------------------------------------
+	elseif event == "SPELL_ACTIVATION_OVERLAY_GLOW_SHOW" then
+		for button in next, ActiveButtons do
+			local spellId = button:GetSpellId()
+			if spellId and spellId == arg1 then
+				if not button.isMainButton then
+					button:SetGlowing(true, true)
+				end
+				ShowOverlayGlow(button)
+			elseif button._state_type == "action" then
+				-- A flyout can proc through one of the spells inside it.
+				-- FlyoutHasSpell is not in 5.4.8's FrameXML anywhere, so treat
+				-- it as optional rather than assuming the C function is there.
+				local actionType, id = GetActionInfo(button._state_action)
+				if actionType == "flyout" and FlyoutHasSpell and FlyoutHasSpell(id, arg1) then
+					button:SetGlowing(true, true)
+					ShowOverlayGlow(button)
+				end
+			end
+		end
+	elseif event == "SPELL_ACTIVATION_OVERLAY_GLOW_HIDE" then
+		for button in next, ActiveButtons do
+			local spellId = button:GetSpellId()
+			if spellId and spellId == arg1 then
+				HideOverlayGlow(button)
+				if not button.isMainButton then
+					button:SetGlowing(false)
+					UpdateCooldown(button)
+				end
+			elseif button._state_type == "action" then
+				local actionType, id = GetActionInfo(button._state_action)
+				if actionType == "flyout" and FlyoutHasSpell and FlyoutHasSpell(id, arg1) then
+					button:SetGlowing(false)
+					HideOverlayGlow(button)
+				end
+			end
+		end
+	elseif event == "SPELL_UPDATE_CHARGES" then
+		ForAllButtons(UpdateCount, true)
+	elseif event == "LOSS_OF_CONTROL_ADDED" or event == "LOSS_OF_CONTROL_UPDATE" then
+		for button in next, ActionButtons do
+			UpdateCooldown(button)
+		end
+	elseif event == "UPDATE_SUMMONPETS_ACTION" then
+		-- Battle-pet summon slots change their icon to whichever pet is out.
+		for button in next, ActiveButtons do
+			if button._state_type == "action" then
+				local actionType = GetActionInfo(button._state_action)
+				if actionType == "summonpet" then
+					-- Upstream pokes button.icon directly here. This fork runs
+					-- the icon through SetPortraitToTexture / a slice mask in
+					-- round mode (see Update), so go through Update instead --
+					-- setting the raw texture would show a square icon.
+					Update(button)
+				end
 			end
 		end
 	end
@@ -1163,6 +1367,13 @@ function Update(self)
 
 	UpdateNewAction(self)
 
+	-- Restored for 5.4.8: keep the flyout arrow and the proc glow in step with
+	-- whatever this button now points at. Without these two, a flyout dragged
+	-- onto the bar showed no arrow, and a spell that was already procced when
+	-- the page changed came up unlit.
+	UpdateFlyout(self)
+	UpdateOverlayGlow(self)
+
 	if GameTooltip:GetOwner() == self then
 		UpdateTooltip(self)
 	end
@@ -1241,7 +1452,17 @@ function UpdateCount(self)
 			self.Count:SetText(count)
 		end
 	else
-		self.Count:SetText("")
+		-- Restored for 5.4.8. Charge-based spells (Roll, Blink, Frozen Orb,
+		-- Nether Tempest...) arrived in MoP 5.0 and show their remaining stack
+		-- in the count corner, exactly where a consumable shows its quantity.
+		-- 3.3.5 had no GetActionCharges, so the backport left this blank and
+		-- every charge spell on the bar looked like it had none.
+		local charges, maxCharges = self:GetCharges()
+		if charges and maxCharges and maxCharges > 1 then
+			self.Count:SetText(charges)
+		else
+			self.Count:SetText("")
+		end
 	end
 end
 
@@ -1262,8 +1483,93 @@ function UpdatePage(self)
 end 
 
 function UpdateCooldown(self)
-	local start, duration, enable = self:GetCooldown()
-	CooldownFrame_SetTimer(self.cooldown, start, duration, enable)
+	-- Restored for 5.4.8. Two things changed since 3.3.5, both of them handled
+	-- by the client itself once it is given the arguments:
+	--
+	--  1. CooldownFrame_SetTimer gained charges/maxCharges (FrameXML/Cooldown.lua
+	--     is a one-liner forwarding to Cooldown:SetCooldown). The C widget then
+	--     draws the partial charge swipe -- upstream's whole ChargeCooldown
+	--     frame pool exists only because RETAIL took that behaviour back out.
+	--     On MoP the four-argument SetCooldown does it for free, so there is
+	--     nothing to pool here.
+	--  2. GetActionCooldown returns 5 values on MoP (start, duration, enable,
+	--     charges, maxCharges) rather than 3. GetSpellCooldown/GetItemCooldown
+	--     still return 3, so the extra two arrive as nil, which SetCooldown
+	--     treats as "no charges" -- no branch needed.
+	local start, duration, enable, charges, maxCharges = self:GetCooldown()
+	CooldownFrame_SetTimer(self.cooldown, start, duration, enable, charges, maxCharges)
+
+	-- Loss of Control is a MoP 5.4 feature: the red "you are silenced/feared"
+	-- swipe over the affected ability. The widget method only exists on clients
+	-- that shipped it, hence the guard.
+	local cooldown = self.cooldown
+	if cooldown.SetLossOfControlCooldown then
+		local locStart, locDuration = self:GetLossOfControlCooldown()
+		cooldown:SetLossOfControlCooldown(locStart or 0, locDuration or 0)
+	end
+end
+
+-----------------------------------------------------------
+--- Spell activation overlay ("proc glow")
+-----------------------------------------------------------
+-- ConsolePortBar/Libs/ButtonGlow.lua has always shipped with this addon and is
+-- upvalued at the top of this file as LBG -- but the backport removed every
+-- call site, so the library sat there unused and no ability ever glowed when it
+-- procced. These three functions are the call sites, restored.
+
+function ShowOverlayGlow(self)
+	LBG.ShowOverlayGlow(self)
+end
+
+function HideOverlayGlow(self)
+	LBG.HideOverlayGlow(self)
+end
+
+function UpdateOverlayGlow(self)
+	local spellId = self:GetSpellId()
+	if spellId and CPAPI:IsSpellOverlayed(spellId) then
+		ShowOverlayGlow(self)
+	else
+		HideOverlayGlow(self)
+	end
+end
+
+-----------------------------------------------------------
+--- Spell flyouts
+-----------------------------------------------------------
+-- Flyouts (the little stacks: Call Pet, Portals, Teleports, Mage armors...)
+-- are a Cataclysm action type, so 3.3.5 had none and the backport dropped the
+-- handling. The button template still declares FlyoutArrow / FlyoutBorder /
+-- FlyoutBorderShadow (ConsolePort/XML/Templates/ActionButton.xml), and 5.4.8
+-- still has ActionButton_UpdateFlyout and SpellFlyout, so the arrow just needs
+-- wiring back up. Clicking is already handled: SecureTemplates.lua toggles
+-- SpellFlyout for a 'flyout' action all by itself.
+if type(ActionButton_UpdateFlyout) == 'function' then
+	hooksecurefunc("ActionButton_UpdateFlyout", function(self, ...)
+		if ButtonRegistry[self] then
+			UpdateFlyout(self)
+		end
+	end)
+end
+
+function UpdateFlyout(self)
+	if not self.FlyoutArrow then return end
+	if self.FlyoutBorder then self.FlyoutBorder:Hide() end
+	if self.FlyoutBorderShadow then self.FlyoutBorderShadow:Hide() end
+	if self._state_type == "action" then
+		local actionType = GetActionInfo(self._state_action)
+		if actionType == "flyout" then
+			self.FlyoutArrow:Show()
+			self.FlyoutArrow:ClearAllPoints()
+			-- The bar sits at the bottom of the screen, so flyouts always open
+			-- upward; point the arrow down toward its own button rather than
+			-- reading flyoutDirection like Blizzard's version does.
+			self.FlyoutArrow:SetPoint("CENTER", 0, self.isMainButton and -20 or -10)
+			SetClampedTextureRotation(self.FlyoutArrow, 180)
+			return
+		end
+	end
+	self.FlyoutArrow:Hide()
 end
 
 function StartFlash(self)
@@ -1347,6 +1653,9 @@ Generic.HasAction               = function(self) return nil end
 Generic.GetActionText           = function(self) return "" end
 Generic.GetTexture              = function(self) return nil end
 Generic.GetCount                = function(self) return 0 end
+-- Restored for 5.4.8: charges (MoP 5.0) and loss of control (MoP 5.4).
+Generic.GetCharges              = function(self) return nil end
+Generic.GetLossOfControlCooldown = function(self) return 0, 0 end
 Generic.GetCooldown             = function(self) return 0, 0, 0 end
 Generic.IsAttack                = function(self) return nil end
 Generic.IsEquipped              = function(self) return nil end
@@ -1374,6 +1683,13 @@ Action.HasAction               = function(self) return HasAction(self._state_act
 Action.GetActionText           = function(self) return GetActionText(self._state_action) end
 Action.GetTexture              = function(self) return GetActionTexture(self._state_action) end
 Action.GetCount                = function(self) return GetActionCount(self._state_action) end
+Action.GetCharges              = function(self) return GetActionCharges(self._state_action) end
+Action.GetLossOfControlCooldown = function(self)
+	if GetActionLossOfControlCooldown then
+		return GetActionLossOfControlCooldown(self._state_action)
+	end
+	return 0, 0
+end
 Action.GetCooldown             = function(self) return GetActionCooldown(self._state_action) end
 Action.IsAttack                = function(self) return IsAttackAction(self._state_action) end
 Action.IsEquipped              = function(self) return IsEquippedAction(self._state_action) end
@@ -1398,6 +1714,11 @@ Spell.HasAction               = function(self) return true end
 Spell.GetActionText           = function(self) return "" end
 Spell.GetTexture              = function(self) return GetSpellTexture(self._state_action) end
 Spell.GetCount                = function(self) return GetSpellCount(self._state_action) end
+-- GetActionCharges is used throughout 5.4.8's FrameXML, but GetSpellCharges is
+-- referenced nowhere in it, so do not assume this build exports it.
+Spell.GetCharges              = function(self)
+	if GetSpellCharges then return GetSpellCharges(self._state_action) end
+end
 Spell.GetCooldown             = function(self) return GetSpellCooldown(self._state_action) end
 Spell.IsAttack                = function(self) return IsAttackSpell(FindSpellBookSlotBySpellID(self._state_action), "spell") end -- needs spell book id as of 4.0.1.13066
 Spell.IsEquipped              = function(self) return nil end
@@ -1503,4 +1824,4 @@ end
 Dummy.UpdateAction = function(self)
     if self._state_type ~= 'dummy' then return end
     Update(self)
-end
+end

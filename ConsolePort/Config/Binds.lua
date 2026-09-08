@@ -900,11 +900,16 @@ db.PANELS[#db.PANELS + 1] = {name = "Binds", header = TUTORIAL.HEADER, mixin = W
 		self.Popup:SetPopup(self:GetText(), self.ProfileScroll, self.Import, self.Remove, 600, 500)
 	end)
 
-	self.Import.Import = CreateFrame("Button", self.Import)
+	-- CreateFrame's second argument is the NAME. These were passing a frame
+	-- table there, leaving the buttons parented to UIParent at best and, on a
+	-- stricter client, raising "bad argument #2 (string expected, got table)"
+	-- partway through this panel builder -- which is what leaves the config
+	-- window showing its art with an empty body.
+	self.Import.Import = CreateFrame("Button", nil, self.Import)
 	self.Import.Import:SetText(TUTORIAL.IMPORTBUTTON)
 	self.Import.Import:SetScript("OnClick", ImportOnClick)
 
-	self.Import.Remove = CreateFrame("Button", self.Import)
+	self.Import.Remove = CreateFrame("Button", nil, self.Import)
 	self.Import.Remove:SetText(TUTORIAL.REMOVEBUTTON)
 	self.Import.Remove:SetScript("OnClick", RemoveOnClick)
 	self.Import.Remove.dontHide = true

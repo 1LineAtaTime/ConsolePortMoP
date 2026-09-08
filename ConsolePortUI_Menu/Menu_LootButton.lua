@@ -1,6 +1,9 @@
 local _, L = ...
 local UI, Control, db = ConsolePortUI:GetEssentials()
 local KEY = db.KEY
+-- CPAPI is not a global; every sibling file upvalues it and this one did not,
+-- so LootButton:Animate errored on every group-loot roll.
+local CPAPI = db.CPAPI
 local LootButton = {}
 L.LootButton = LootButton
 
@@ -88,9 +91,17 @@ end
 
 function LootButton:UpdateItemQuality(quality)
 	local color = ITEM_QUALITY_COLORS[quality]
+	if not color then return end
 	self.Label:SetVertexColor(color.r, color.g, color.b)
 	self.HighlightTexture:SetVertexColor(color.r, color.g, color.b)
-	self.Mask:SetAtlas(LOOT_BORDER_BY_QUALITY[quality] or LOOT_BORDER_BY_QUALITY[LE_ITEM_QUALITY_UNCOMMON])
+	-- LOOT_BORDER_BY_QUALITY and Texture:SetAtlas are both Warlords-era; on MoP
+	-- the constant is nil (indexing it errored) and there is no atlas system.
+	-- Tint the existing mask by quality instead.
+	if LOOT_BORDER_BY_QUALITY and self.Mask.SetAtlas then
+		self.Mask:SetAtlas(LOOT_BORDER_BY_QUALITY[quality] or LOOT_BORDER_BY_QUALITY[LE_ITEM_QUALITY_UNCOMMON])
+	elseif self.Mask then
+		self.Mask:SetVertexColor(color.r, color.g, color.b)
+	end
 end
 
 function LootButton:UpdateTimer(rollID)

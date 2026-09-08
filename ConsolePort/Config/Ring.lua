@@ -298,11 +298,22 @@ local function CreateIconPickerFrame()
         frame.poolSize = size
     end
 
-    local function GetTotalIcons() return #frame.customIcons + GetNumMacroIcons() end
+    -- MoP replaced GetNumMacroIcons/GetMacroIconInfo with GetMacroIcons(tbl),
+    -- which fills a table in one call. CPAPI normalises both shapes; cache the
+    -- result because the list is thousands of entries and does not change.
+    local macroIcons
+    local function GetMacroIconCache()
+        if not macroIcons then
+            macroIcons = CPAPI:GetMacroIconList()
+        end
+        return macroIcons
+    end
+
+    local function GetTotalIcons() return #frame.customIcons + #GetMacroIconCache() end
 
     local function GetIconTexture(idx)
         if idx <= #frame.customIcons then return frame.customIcons[idx] end
-        return GetMacroIconInfo(idx - #frame.customIcons)
+        return GetMacroIconCache()[idx - #frame.customIcons]
     end
 
     local function UpdateVisible()
@@ -421,11 +432,27 @@ local function BuildLoadoutCategories()
             local highestRanks = {}
 
             for s = offset + 1, offset + numSpells do
-                local spellName, rank = GetSpellName(s, BOOKTYPE_SPELL)
-                if spellName and not IsPassiveSpell(s, BOOKTYPE_SPELL) then
-                    local tex = GetSpellTexture(s, BOOKTYPE_SPELL)
-                    local spellID = select(3, strfind(
-                        (GetSpellLink(spellName, rank) or ""), "spell:(%d+)"))
+                -- MoP: GetSpellName/GetSpellTexture(index, bookType) were replaced
+                -- by GetSpellBookItemName/GetSpellBookItemTexture, and the spell id
+                -- comes straight off GetSpellBookItemInfo instead of parsing a link.
+                -- (Spell ranks were removed in Cataclysm, so `rank` is nil on MoP and
+                --  the highestRanks table just de-duplicates by name.)
+                local spellName, rank = CPAPI:GetSpellBookItemName(s, BOOKTYPE_SPELL)
+                local slotType, slotID
+                if GetSpellBookItemInfo then
+                    slotType, slotID = GetSpellBookItemInfo(s, BOOKTYPE_SPELL)
+                end
+                -- MoP adds slot types 3.3.5 never had: FLYOUT (slotID is a
+                -- flyout id, not a spell) and FUTURESPELL (not yet learned).
+                -- Only real SPELL slots belong in a utility ring.
+                local isCastable = (slotType == nil) or (slotType == 'SPELL')
+                if spellName and isCastable and not IsPassiveSpell(s, BOOKTYPE_SPELL) then
+                    local tex = CPAPI:GetSpellBookItemTexture(s, BOOKTYPE_SPELL)
+                    local spellID = slotID
+                    if not spellID then
+                        spellID = select(3, strfind(
+                            (GetSpellLink(spellName, rank) or ""), "spell:(%d+)"))
+                    end
                     if tex then
                         highestRanks[spellName] = {
                             name    = spellName,

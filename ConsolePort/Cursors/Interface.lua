@@ -285,11 +285,13 @@ SafeOnEnter[SpellButton1:GetScript('OnEnter')] = function(self)
 	-- spellbook buttons push updates to the action bar controller in order to draw highlights
 	-- on actionbuttons that holds the spell in question. this taints the action bar controller.
 
-	local slot = CPAPI.IsCustomClient() and self.spell or SpellBook_GetSpellID(self:GetID())
-	local SpellBookFrame = CPAPI.IsCustomClient() and CPAPI.GetCustomFrame("SpellBookFrame") or SpellBookFrame 
- 
+	-- MoP: SpellBook_GetSpellID(index) -> SpellBook_GetSpellBookSlot(button),
+	-- and GameTooltip:SetSpell -> :SetSpellBookItem. CPAPI picks per client.
+	local slot = CPAPI.IsCustomClient() and self.spell or CPAPI:GetSpellBookSlot(self)
+	local SpellBookFrame = CPAPI.IsCustomClient() and CPAPI.GetCustomFrame("SpellBookFrame") or SpellBookFrame
+
 	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-	if ( GameTooltip:SetSpell(slot, SpellBookFrame.bookType) ) then 
+	if ( CPAPI:SetTooltipSpellBookItem(GameTooltip, slot, SpellBookFrame.bookType) ) then
 		self.UpdateTooltip = SafeOnEnter[SpellButton1:GetScript('OnEnter')]
 	else 
 		self.UpdateTooltip = nil
@@ -514,11 +516,16 @@ local function SpecialAction(self)
 						
 			local SpellBookFrame = CPAPI.IsCustomClient() and CPAPI.GetCustomFrame("SpellBookFrame") or SpellBookFrame
 
-			if(node:IsEnabled() ~= 0) then 
-				local book, id, spellID, _ = SpellBookFrame, node:GetID()  
-				local sID, sDisplayID = CPAPI.IsCustomClient() and node.spell or SpellBook_GetSpellID(id);   
-			
-				if 	not IsPassiveSpell(sID, SpellBookFrame.bookType) then 
+			-- MoP returns a boolean from IsEnabled() where 3.3.5 returned 1/0.
+			-- The old `~= 0` test is always true against a boolean (different
+			-- Lua types never compare equal), so disabled buttons slipped past.
+			-- This form is correct on both clients.
+			local nodeEnabled = node:IsEnabled()
+			if nodeEnabled and nodeEnabled ~= 0 then
+				local book, id, spellID, _ = SpellBookFrame, node:GetID()
+				local sID, sDisplayID = CPAPI.IsCustomClient() and node.spell or CPAPI:GetSpellBookSlot(node)
+
+				if 	sID and not IsPassiveSpell(sID, SpellBookFrame.bookType) then
 					if book.bookType == BOOKTYPE_PROFESSION then 
 						spellID = id + node:GetParent().spellOffset
 					elseif book.bookType == BOOKTYPE_PET then
@@ -536,7 +543,14 @@ local function SpecialAction(self)
 				--		PickupSpell(spellID)
 				--	end
 					if(sID) then
-						PickupSpell(sID, book.bookType)
+						-- sID is a spellbook SLOT, not a spell id. MoP's slot
+						-- form is PickupSpellBookItem; its PickupSpell takes a
+						-- spell id, so a slot would pick up an unrelated spell.
+						if PickupSpellBookItem then
+							PickupSpellBookItem(sID, book.bookType)
+						else
+							PickupSpell(sID, book.bookType)
+						end
 					end
 				end
 			end

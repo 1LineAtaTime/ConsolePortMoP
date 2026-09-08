@@ -300,25 +300,64 @@ function UnitMenu:BuildPvPPage()
     }
 end
 
+-- Difficulty on 5.4.8.
+-- WotLK had GetDungeonDifficulty()/SetDungeonDifficulty() with their own small
+-- index space. Cataclysm replaced both with the *DifficultyID pair, and MoP's
+-- ids are NOT the old ones: dungeons are 1 (5 Player), 2 (5 Heroic) and 8
+-- (Challenge Mode), while raids are 3, 4, 5, 6 -- see FrameXML/UnitPopup.lua.
+-- The old names are nil here, so these menus were silently inert: every entry
+-- drew, nothing happened on click. Prefer the ID API and keep the WotLK names
+-- as a fallback only.
+local function GetDungeonDiff()
+    if GetDungeonDifficultyID then return GetDungeonDifficultyID() end
+    if GetDungeonDifficulty then return GetDungeonDifficulty() end
+    return 1
+end
+
+local function GetRaidDiff()
+    if GetRaidDifficultyID then return GetRaidDifficultyID() end
+    if GetRaidDifficulty then return GetRaidDifficulty() end
+    return 3
+end
+
+local USES_DIFFICULTY_IDS = (GetDungeonDifficultyID ~= nil)
+
 function UnitMenu:BuildDungeonDifficultyPage()
-    local cur = GetDungeonDifficulty and GetDungeonDifficulty() or 1
-    return {
+    local cur = GetDungeonDiff()
+    local page = {
         self:GetBackEntry(),
         {type='header', text=DUNGEON_DIFFICULTY or 'Dungeon Difficulty'},
-        {type='radio', text=PLAYER_DIFFICULTY1 or 'Normal', icon=ICON.Normal, command='DoDungeonDifficulty', data=1, isSelected=cur==1},
-        {type='radio', text=PLAYER_DIFFICULTY2 or 'Heroic', icon=ICON.Heroic, command='DoDungeonDifficulty', data=2, isSelected=cur==2},
+        {type='radio', text=DUNGEON_DIFFICULTY1 or PLAYER_DIFFICULTY1 or 'Normal',
+            icon=ICON.Normal, command='DoDungeonDifficulty', data=1, isSelected=cur==1},
+        {type='radio', text=DUNGEON_DIFFICULTY2 or PLAYER_DIFFICULTY2 or 'Heroic',
+            icon=ICON.Heroic, command='DoDungeonDifficulty', data=2, isSelected=cur==2},
     }
+    if USES_DIFFICULTY_IDS and CHALLENGE_MODE then
+        tinsert(page, {type='radio', text=CHALLENGE_MODE, icon=ICON.Heroic,
+            command='DoDungeonDifficulty', data=8, isSelected=cur==8})
+    end
+    return page
 end
 
 function UnitMenu:BuildRaidDifficultyPage()
-    local cur = GetRaidDifficulty and GetRaidDifficulty() or 1
+    local cur = GetRaidDiff()
+    -- MoP: 3 = 10 Player, 4 = 25 Player, 5 = 10 Heroic, 6 = 25 Heroic.
+    -- WotLK: 1 = 10, 2 = 10 Heroic, 3 = 25, 4 = 25 Heroic.
+    local n10, n25, h10, h25 = 3, 4, 5, 6
+    if not USES_DIFFICULTY_IDS then
+        n10, n25, h10, h25 = 1, 3, 2, 4
+    end
     return {
         self:GetBackEntry(),
         {type='header', text=RAID_DIFFICULTY or 'Raid Difficulty'},
-        {type='radio', text='10 '..(PLAYER_DIFFICULTY1 or 'Normal'), icon=ICON.Normal, command='DoRaidDifficulty', data=1, isSelected=cur==1},
-        {type='radio', text='25 '..(PLAYER_DIFFICULTY1 or 'Normal'), icon=ICON.Normal, command='DoRaidDifficulty', data=3, isSelected=cur==3},
-        {type='radio', text='10 '..(PLAYER_DIFFICULTY2 or 'Heroic'), icon=ICON.Heroic, command='DoRaidDifficulty', data=2, isSelected=cur==2},
-        {type='radio', text='25 '..(PLAYER_DIFFICULTY2 or 'Heroic'), icon=ICON.Heroic, command='DoRaidDifficulty', data=4, isSelected=cur==4},
+        {type='radio', text=RAID_DIFFICULTY1 or ('10 '..(PLAYER_DIFFICULTY1 or 'Normal')),
+            icon=ICON.Normal, command='DoRaidDifficulty', data=n10, isSelected=cur==n10},
+        {type='radio', text=RAID_DIFFICULTY2 or ('25 '..(PLAYER_DIFFICULTY1 or 'Normal')),
+            icon=ICON.Normal, command='DoRaidDifficulty', data=n25, isSelected=cur==n25},
+        {type='radio', text=RAID_DIFFICULTY3 or ('10 '..(PLAYER_DIFFICULTY2 or 'Heroic')),
+            icon=ICON.Heroic, command='DoRaidDifficulty', data=h10, isSelected=cur==h10},
+        {type='radio', text=RAID_DIFFICULTY4 or ('25 '..(PLAYER_DIFFICULTY2 or 'Heroic')),
+            icon=ICON.Heroic, command='DoRaidDifficulty', data=h25, isSelected=cur==h25},
     }
 end
 
@@ -358,11 +397,25 @@ end
 ---------------------------------------------------------------
 -- Root page builders
 ---------------------------------------------------------------
+-- Cataclysm replaced IsPartyLeader/GetNumPartyMembers/GetNumRaidMembers with
+-- UnitIsGroupLeader/GetNumGroupMembers/GetNumSubgroupMembers. The old names are
+-- nil on MoP, so calling them here errored the whole unit menu.
+local function IsGroupLeader()
+    if UnitIsGroupLeader then return UnitIsGroupLeader('player') end
+    return IsPartyLeader and IsPartyLeader()
+end
+
+local function IsInAnyGroup()
+    if GetNumGroupMembers then return GetNumGroupMembers() > 0 end
+    return (GetNumPartyMembers and GetNumPartyMembers() > 0)
+        or (GetNumRaidMembers and GetNumRaidMembers() > 0)
+end
+
 function UnitMenu:BuildPlayerPage()
     local page    = {}
     local unit    = self.unit
-    local iLeader = IsPartyLeader()
-    local inGroup = (GetNumPartyMembers() > 0) or (GetNumRaidMembers() > 0)
+    local iLeader = IsGroupLeader()
+    local inGroup = IsInAnyGroup()
 
     tinsert(page, {type='button', text=RAID_TARGET_ICON or 'Target Marker Icon', icon=ICON.RaidTarget, command='PushRaidTarget'})
 
@@ -399,7 +452,7 @@ end
 function UnitMenu:BuildTargetPage()
     local page    = {}
     local unit    = self.unit
-    local iLeader = IsPartyLeader()
+    local iLeader = IsGroupLeader()
 
     tinsert(page, {type='button', text=RAID_TARGET_ICON or 'Target Marker Icon', icon=ICON.RaidTarget, command='PushRaidTarget'})
 
@@ -473,10 +526,20 @@ function UnitMenu:DoPvPDisable()
     if UnitIsPVP('player') then TogglePVP() end ; self:PopPage()
 end
 function UnitMenu:DoDungeonDifficulty(id)
-    if SetDungeonDifficulty then SetDungeonDifficulty(id) end ; self:PopPage()
+    if SetDungeonDifficultyID then
+        SetDungeonDifficultyID(id)
+    elseif SetDungeonDifficulty then
+        SetDungeonDifficulty(id)
+    end
+    self:PopPage()
 end
 function UnitMenu:DoRaidDifficulty(id)
-    if SetRaidDifficulty then SetRaidDifficulty(id) end ; self:PopPage()
+    if SetRaidDifficultyID then
+        SetRaidDifficultyID(id)
+    elseif SetRaidDifficulty then
+        SetRaidDifficulty(id)
+    end
+    self:PopPage()
 end
 function UnitMenu:DoResetInstances()
     if ResetInstances then ResetInstances() end ; self:Hide()

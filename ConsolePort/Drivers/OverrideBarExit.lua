@@ -1,7 +1,12 @@
 ---------------------------------------------------------------
 -- OverrideBarExit.lua: Exit vehicle/override/possess bar.
 ---------------------------------------------------------------
+-- MoP replaced VehicleMenuBarLeaveButton with MainMenuBarVehicleLeaveButton,
+-- plus OverrideActionBar's own leave button for skinned vehicle bars. Without
+-- this the exit binding still worked but its on-screen hotkey never appeared.
 local ExitButton = VehicleMenuBarLeaveButton
+	or MainMenuBarVehicleLeaveButton
+	or (OverrideActionBar and (OverrideActionBar.LeaveButton or _G.OverrideActionBarLeaveFrameLeaveButton))
 ---------------------------------------------------------------
 local _, db = ...
 local OBExit = ConsolePortOBExit

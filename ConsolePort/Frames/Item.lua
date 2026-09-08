@@ -133,6 +133,14 @@ local function GetItemInventoryType(Item)
 end
 
 
+-- MoP removed the ammo slot (Cataclysm), and GetInventorySlotInfo throws on an
+-- unknown slot name -- which would abort this file at load and take the rest of
+-- the addon's Frames chain with it. Resolve every slot defensively instead.
+local function InvSlot(name)
+    local ok, id = pcall(GetInventorySlotInfo, name)
+    if ok then return id end
+end
+
 -- build once, only where multiple slots are possible we return a table
 local INVSLOTMAP = {
     INVTYPE_HEAD            = GetInventorySlotInfo("HeadSlot"),
@@ -151,11 +159,11 @@ local INVSLOTMAP = {
     INVTYPE_2HWEAPON        = GetInventorySlotInfo("MainHandSlot"),
     INVTYPE_SHIELD          = GetInventorySlotInfo("SecondaryHandSlot"),
     INVTYPE_HOLDABLE        = GetInventorySlotInfo("SecondaryHandSlot"),
-    INVTYPE_RANGED          = GetInventorySlotInfo("RangedSlot"),
-    INVTYPE_RANGEDRIGHT     = GetInventorySlotInfo("RangedSlot"),
-    INVTYPE_AMMO            = GetInventorySlotInfo("AmmoSlot"),
-    INVTYPE_QUIVER          = GetInventorySlotInfo("AmmoSlot"),
-    INVTYPE_THROWN          = GetInventorySlotInfo("RangedSlot"),
+    INVTYPE_RANGED          = InvSlot("RangedSlot"),
+    INVTYPE_RANGEDRIGHT     = InvSlot("RangedSlot"),
+    INVTYPE_AMMO            = InvSlot("AmmoSlot"),   -- nil on MoP
+    INVTYPE_QUIVER          = InvSlot("AmmoSlot"),   -- nil on MoP
+    INVTYPE_THROWN          = InvSlot("RangedSlot"),
     INVTYPE_CLOAK           = GetInventorySlotInfo("BackSlot"),
     INVTYPE_TABARD          = GetInventorySlotInfo("TabardSlot"),
     INVTYPE_RELIC           = GetInventorySlotInfo("SecondaryHandSlot"),

@@ -46,7 +46,13 @@ local PAGER_SECURE_FUNCTIONS = {
 	GetActionSpellSlot = [[
 		local type, _, subType, spellID = control:RunFor(self, self:GetAttribute('GetActionInfo'), ...)
 		if type == 'spell' and spellID and spellID ~= 0 and subType == 'spell' then
-			--return FindSpellBookSlotBySpellID(spellID) 
+			-- Restored for 5.4.8: FindSpellBookSlotBySpellID IS whitelisted in
+			-- this client's restricted environment (3.3.5 whitelisted nothing of
+			-- the sort, which is why it was commented out). Without it this
+			-- returns nil, so IsHarmfulAction / IsHelpfulAction below always
+			-- fall through and reticle targeting cannot tell a friendly cast
+			-- from a hostile one.
+			return FindSpellBookSlotBySpellID(spellID)
 		end
 	]],
 	IsHarmfulAction = [[

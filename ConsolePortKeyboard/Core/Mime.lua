@@ -7,7 +7,14 @@ local Fade = ConsolePort:GetData().UIFrameFadeIn
 -- EditBox mime (mimicks entered text in focused editbox)
 ---------------------------------------------------------------
 local Mime = CreateFrame("EditBox", "$parentMime", Keyboard)
---Mime:Disable()
+-- Restored (upstream has this active; ConsolePortLK commented it out, and that
+-- one character is the whole bug). Mime is an EditBox parented to the on-screen
+-- keyboard. Left ENABLED it can take keyboard focus itself -- and Update.lua
+-- reacts to "an EditBox has focus" by opening the keyboard for it. So the
+-- keyboard opens for its own mime, GetCurrentKeyBoardFocus() never returns nil
+-- again, Keyboard:CLOSE() is never reached, and the frame holds every keystroke
+-- in the game until /reload. Disabled it cannot take focus, which is the point.
+Mime:Disable()
 Mime:SetPoint("LEFT", Keyboard, "CENTER", 0, 70)
 Mime:SetSize(1, 1)
 Mime.Text = Mime:CreateFontString("$parentText", "BACKGROUND")

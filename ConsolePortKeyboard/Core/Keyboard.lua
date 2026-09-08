@@ -7,6 +7,42 @@ local DIR, Current = 0
 local db = ConsolePort:GetData()
 local CPAPI = db.CPAPI
 
+---------------------------------------------------------------
+-- Keyboard capture (restored for 5.4.8)
+---------------------------------------------------------------
+-- This frame runs EnableKeyboard(true) and owns OnKeyDown/OnKeyUp, so while it
+-- is VISIBLE it swallows every keystroke in the game. Upstream paired that with
+-- SetPropagateKeyboardInput so anything the on-screen keyboard did not consume
+-- still reached your real bindings. The 3.3.5 backport commented out every one
+-- of those calls (same regression as ConsolePort/Frames/Config.lua and
+-- Frames/Helper.lua, from CPLK commit 3fd9873).
+--
+-- The consequence: open the on-screen keyboard once -- which Timeout() leaves
+-- faded to alpha 0.25, i.e. good as invisible -- and M, C, bags and the menu
+-- toggle all stop working until a /reload. Escape still appears to work because
+-- the engine handles it below the binding layer.
+--
+-- GetPropagateKeyboardInput does not exist on 5.4.8 (zero uses in its FrameXML),
+-- so track the state here instead of reading it back.
+function Keyboard:SetPropagate(state)
+	self.isPropagating = state and true or false
+	if self.SetPropagateKeyboardInput then
+		self:SetPropagateKeyboardInput(state and true or false)
+	end
+end
+
+-- Release the keyboard entirely: nothing typed should reach this frame.
+function Keyboard:ReleaseKeyboard()
+	self:SetPropagate(true)
+	self:EnableKeyboard(false)
+end
+
+-- Take the keyboard for on-screen input.
+function Keyboard:CaptureKeyboard()
+	self:EnableKeyboard(true)
+	self:SetPropagate(false)
+end
+
 local cfg = {
 	KEY = {
 		RIGHT = false,
@@ -103,10 +139,15 @@ function Keyboard:OMIT()
 end
 
 function Keyboard:CLOSE()
-	self.Focus:ClearFocus()
-	self.Focus:EnableKeyboard(true)
+	-- Focus can already be nil if the edit box went away underneath us; on 5.4.8
+	-- that raised inside a key handler and left the keyboard captured forever.
+	if self.Focus then
+		self.Focus:ClearFocus()
+		self.Focus:EnableKeyboard(true)
+	end
 	self.Focus = nil
 	self:UpdateDictionary()
+	self:ReleaseKeyboard()
 	self:Hide()
 	if ConsolePort.SetCursorObstructor then
 		ConsolePort:SetCursorObstructor(self, false)
@@ -226,19 +267,19 @@ function Keyboard:RunCommand(input)
 end
 
 function Keyboard:OnKeyDown(input)
-	--if not self:GetPropagateKeyboardInput() then
+	if not self.isPropagating then
 		KEY.UP = input == "UP" or input == "W" or KEY.UP
 		KEY.DOWN = input == "DOWN" or input == "S" or KEY.DOWN
 		KEY.LEFT = input == "LEFT" or input == "A" or KEY.LEFT
 		KEY.RIGHT = input == "RIGHT" or input == "D" or KEY.RIGHT
 		self:SelectSet()
 		self:CheckModifier()
-	--end
+	end
 	self:RunCommand(input)
 end
 
 function Keyboard:OnKeyUp(input)
-	--if not self:GetPropagateKeyboardInput() then
+	if not self.isPropagating then
 		if input == "UP" or input == "W" then
 			KEY.UP = false
 		elseif input == "DOWN" or input == "S" then
@@ -250,7 +291,7 @@ function Keyboard:OnKeyUp(input)
 		end
 		self:SelectSet()
 		self:CheckModifier()
-	--end
+	end
 end
 
 
@@ -301,7 +342,10 @@ function Keyboard:LoadFrame()
 
 	self:SelectSet()
 	self:CheckModifier()
-	self:EnableKeyboard(true)
+	-- Do NOT capture here. LoadFrame runs at setup, long before anything is
+	-- focused, and the frame it captures for is hidden -- but the capture stuck.
+	-- SetFocus takes the keyboard when there is actually something to type into.
+	self:ReleaseKeyboard()
 end
 
 function Keyboard:OnEvent(event, ...)
@@ -319,6 +363,7 @@ function Keyboard:SetFocus(newFocus)
 	end
 	self.Focus = newFocus
 	self.Focus:EnableKeyboard(false)
+	self:CaptureKeyboard()
 	self:Show()
 	PlaySound(CPAPI.GetSound("IG_MAINMENU_OPTION_CHECKBOX_ON"))
 end
@@ -390,8 +435,8 @@ function Keyboard:Timeout(time)
 	for i, region in pairs({self:GetRegions()}) do
 		--db.UIFrameFadeOut(region, 0.2, region:GetAlpha(), 0)
 	end
-	--self:SetPropagateKeyboardInput(true)
-	self.Focus:EnableKeyboard(true)
+	self:SetPropagate(true)
+	if self.Focus then self.Focus:EnableKeyboard(true) end
 	self.Timer = 0
 	self:SetScript("OnUpdate", function(self, elapsed)
 		self.Timer = self.Timer + elapsed
@@ -400,8 +445,8 @@ function Keyboard:Timeout(time)
 			for i, region in pairs({self:GetRegions()}) do
 				--db.UIFrameFadeIn(region, 0.2, region:GetAlpha(), 1)
 			end
-			self.Focus:EnableKeyboard(false)
-			--self:SetPropagateKeyboardInput(false)
+			if self.Focus then self.Focus:EnableKeyboard(false) end
+			self:SetPropagate(false)
 			self:SetScript("OnUpdate", self.OnUpdate)
 			self.Timer = 0
 		end		
@@ -412,6 +457,9 @@ function Keyboard:OnHide()
 	for key, state in pairs(KEY) do
 		KEY[key] = false
 	end
+	-- Belt and braces: a hidden frame should not receive input anyway, but this
+	-- one was found still holding it, so make hiding an unconditional release.
+	self:ReleaseKeyboard()
 end
 
 ---------------------------------------------------------------

@@ -2,6 +2,15 @@ local addOn, db = ...
 local CPAPI = db.CPAPI
 
 if CPAPI:IsClassicVersion() then return end
+
+-- This driver has never actually run on any client: the old WOW_PROJECT_ID
+-- check returned true everywhere, so the line above always bailed out. With an
+-- honest version check it would install here for the first time -- and its
+-- snippet walks every protected frame under UIParent on each press, setting
+-- unit='focus' on all of them, including action buttons that have no unit
+-- attribute at all. Untested on 5.4.8, so keep it off for now.
+-- To try it: delete the line below (and see the note in the port report).
+if CPAPI:IsMoPVersion() then return end
 ---------------------------------------------------------------
 -- FocusHold.lua: Reroute spells to focus target
 ---------------------------------------------------------------

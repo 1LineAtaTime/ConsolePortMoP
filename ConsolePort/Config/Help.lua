@@ -1,6 +1,13 @@
 --if select(5, GetAddOnInfo('ConsolePortHelp')) ~= 'DEMAND_LOADED' then return end
-local  _, _, addenabled, addloadable,  _, _ = GetAddOnInfo('ConsolePortHelp')
-if(addenabled ~= 1 and addloadable ~= 1) then
+-- GetAddOnInfo returns differ by client:
+--   3.3.5 -> name, title, notes, enabled, loadable, reason, security
+--   5.4.8 -> name, title, notes, url,     loadable, reason, security, newVersion
+-- The old destructure read positions 3 and 4 (notes and enabled/url) and
+-- compared them to the number 1. On MoP `loadable` is a BOOLEAN and position 4
+-- is a url, so both comparisons were true and this file returned before
+-- registering the Help panel at all. Read position 5 and test truthiness.
+local addloadable = select(5, GetAddOnInfo('ConsolePortHelp'))
+if not (addloadable == 1 or addloadable == true) then
 	return
 end
 

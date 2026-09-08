@@ -37,7 +37,10 @@ end
 -- Get action/input handlers, EasyMotion -> EM for brevity
 local EM, Input = ConsolePortEasyMotionButton, ConsolePortEasyMotionInput
 -- Link functions for world targeting
-EM.HighlightTarget = TargetPriorityHighlightStart
+-- TargetPriorityHighlightStart exists on neither 3.3.5 nor 5.4.8 (it is a
+-- custom-client API), and the secure snippet reaches it through CallMethod,
+-- which raises "Invalid method" on a nil. Give it a harmless no-op.
+EM.HighlightTarget = TargetPriorityHighlightStart or function() end
 --EM.GetNamePlateForUnit = C_NamePlate.GetNamePlateForUnit
 EM:SetScript("OnUpdate", function(self, elapsed) EM:OnUpdate(elapsed) end)
 
