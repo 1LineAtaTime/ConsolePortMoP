@@ -4,6 +4,16 @@ This AddOn is the backported version of [ConsolePortLK]([https://github.com/sebl
 
 Beware that the World of Warcraft 5.4.8 client is old and it's no longer supported, this project has been created only for learning purposes (Lua programming).<br/><br/>
 
+----------------------------------
+----------------------------------
+The rest of the README has been left as is from the original ConsolePortLK git.
+----------------------------------
+----------------------------------
+----------------------------------
+
+
+
+
 ## Differences between ConsolePortLK vs ConsolePort 1.9.17
 
 1. ConsolePortLK is a port to work on a World of Warcraft Lua API older than it supports (WoW 3.3.5a 12340).
